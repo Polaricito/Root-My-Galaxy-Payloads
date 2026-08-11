@@ -59,11 +59,13 @@ COMMON_CFLAGS := \
 
 .DEFAULT_GOAL := all
 
-.PHONY: all clean info release native-mcast-test
+.PHONY: all clean info release shell-bundle native-mcast-test
 
 all: $(PRELOAD) $(APP_PRELOAD) $(ROOT_HELPER)
 
 release: $(APP_RELEASE)
+
+shell-bundle: $(APP_RELEASE) $(ROOT_HELPER)
 
 native-mcast-test: $(NATIVE_MCAST_TEST)
 

