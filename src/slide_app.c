@@ -1264,13 +1264,13 @@ static int app_trigger_fops_slide_slot(size_t slot) {
   char delay_arg[16];
   snprintf(delay_arg, sizeof(delay_arg), "%d", delay);
   SYSCHK(setenv("SLIDE_ENTER_DELAY_USEC", delay_arg, 1));
-  pr_info("app fops slide route slot=%zu parent=%016zx target=%016zx "
+  pr_info("app stack writer route slot=%zu parent=%016zx target=%016zx "
           "lock=%016zx delay=%d\n",
           slot, slide_oracle_parent, slide_oracle_target, fake_lock, delay);
   return slide_trigger_physical_state();
 }
 
-int app_trigger_fops_slide_route(void) {
+int app_trigger_stack_writer_route(void) {
 #if defined(APP_FOPS_REUSE_VERIFIED_PAGE) && \
     APP_FOPS_REUSE_VERIFIED_PAGE
   return app_trigger_fops_slide_slot(P0_ORACLE_PRODUCTION_SLOT);
@@ -1287,7 +1287,7 @@ int app_trigger_fops_oracle_slot(size_t slot) {
 }
 #endif
 #else
-int app_trigger_fops_slide_route(void) {
+int app_trigger_stack_writer_route(void) {
   static size_t delay_index;
   static const int delays[] = {
     70000, 60000, 80000, 40000, 90000, 50000,
@@ -1316,7 +1316,7 @@ int app_trigger_fops_slide_route(void) {
   char delay_arg[16];
   snprintf(delay_arg, sizeof(delay_arg), "%d", delay);
   SYSCHK(setenv("SLIDE_ENTER_DELAY_USEC", delay_arg, 1));
-  pr_info("app fops slide route parent=%016zx target=%016zx lock=%016zx "
+  pr_info("app stack writer route parent=%016zx target=%016zx lock=%016zx "
           "delay=%d\n",
           slide_oracle_parent, slide_oracle_target, fake_lock, delay);
   return slide_trigger_physical_state();

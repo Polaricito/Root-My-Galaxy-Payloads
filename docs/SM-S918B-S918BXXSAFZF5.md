@@ -23,8 +23,9 @@ candidates, not a released support-feed entry.
 
 ## What changed
 
-The app payload now has one shared fake `rt_mutex_waiter` builder and two
-selectable stack-writer backends:
+The app payload now has one shared fake `rt_mutex_waiter` builder, two
+selectable stack-writer backends, and two root backends. The full backend map
+and test state are in [EXPLOIT-BACKENDS.md](EXPLOIT-BACKENDS.md).
 
 ```text
 rootless P0 fingerprint and KernelSnitch
@@ -32,10 +33,9 @@ rootless P0 fingerprint and KernelSnitch
   -> deterministic 24-slab drain
   -> SKB reclaim
   -> MCAST or SIGRETURN writes the same fake waiter
-  -> ashmem fops replacement
-  -> configfs arbitrary read/write
-  -> pipe physical read/write
-  -> kernel usermode-helper root stage
+  -> either:
+       fake fops -> configfs ARW -> pipe physrw -> kernel UMH
+       pipe flags -> checked page-cache overwrite -> device trigger
 ```
 
 - `mcast` copies a native 264-byte `group_source_req`. Real-device trace and
@@ -44,6 +44,11 @@ rootless P0 fingerprint and KernelSnitch
 - `sigreturn` copies the waiter through the signal frame. It detects the
   signal-frame layout and uses `FPSIMD + 0x18` without SVE or `SVE + 0x28` when
   SVE is active.
+- `fops` is the default root backend and is the only route that has reached uid
+  0 in QEMU.
+- `pipeflag` is a shorter experimental backend. Its page-cache overwrite is
+  QEMU-verified, but its exact FZF5 file and service trigger are not yet
+  hardware-verified.
 
 The production payload does not use tracefs, `perf_event_open`, or a QEMU
 oracle. Pselect is not a writer backend for this target.
@@ -65,12 +70,14 @@ The commands below keep the two outputs separate:
 ```sh
 make TARGET=dm3q-S918BXXSAFZF5 \
   STACK_WRITER=mcast \
+  ROOT_BACKEND=fops \
   OUTDIR=build/dm3q-S918BXXSAFZF5-mcast \
   ANDROID_NDK_HOME=/path/to/android-ndk \
   release
 
 make TARGET=dm3q-S918BXXSAFZF5 \
   STACK_WRITER=sigreturn \
+  ROOT_BACKEND=fops \
   OUTDIR=build/dm3q-S918BXXSAFZF5-sigreturn \
   ANDROID_NDK_HOME=/path/to/android-ndk \
   release
@@ -82,6 +89,11 @@ The results are:
 build/dm3q-S918BXXSAFZF5-mcast/cve-2026-43499-app.release.so
 build/dm3q-S918BXXSAFZF5-sigreturn/cve-2026-43499-app.release.so
 ```
+
+`ROOT_BACKEND=pipeflag` selects the QEMU-verified page-cache overwrite route.
+It builds with either writer, but do not use it as a real-device root payload
+until the target file, init service, and SELinux behavior are verified on the
+exact firmware.
 
 ## Fast ADB shell test without an APK
 
@@ -302,6 +314,13 @@ The QEMU rehost's MCAST wrapper has different stack geometry and used a
 harness-only `0x78` override. It validates the MCAST backend and the rest of the
 shared chain, not the real-device `0x40` placement. The release value `0x40`
 comes from the real SM-S918B trace and matching disassembly.
+
+The same exact-mm harness also isolated the new `pipeflag` backend from
+KernelSnitch timing. MCAST, SIGRETURN with SVE, and SIGRETURN without SVE each
+set `PIPE_BUF_FLAG_CAN_MERGE` on the held pipe object and passed an exact
+readback from a mode-0444 test file. These runs ended at
+`PIPEFLAG_OVERWRITE_OK`; they prove the shorter terminal primitive, not the
+real-device service trigger.
 
 The active routes also completed fully rootless QEMU runs without tracefs,
 perf, or the exact-mm oracle before unrelated dead test code was removed. A
