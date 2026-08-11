@@ -20,6 +20,15 @@ Two native payloads are built:
 
 Both paths still need live A546E validation. This change builds native `.so` payloads only; it does not modify or build the APK.
 
+## Ready-built app payloads
+
+| Backend | File | SHA-256 | Size |
+| --- | --- | --- | ---: |
+| MCAST | `artifacts/a54x-A546EXXSKFZF4/cve-2026-43499-app.so` | `a1e24c6b67d5db8dd8dc918d561eeae1d12f0e9747ee407bee510b2e37be8a78` | 104128 |
+| SIGRETURN | `artifacts/a54x-A546EXXSKFZF4/cve-2026-43499-app-sigreturn.so` | `58c77441d472a789ec53d6c13bf7a871ff9d202add4cb03eca41a69b16253658` | 104128 |
+
+These are hardware-test candidates, not a released support-feed entry. Verify the selected hash before every test.
+
 ## Build
 
 From WSL:
@@ -73,7 +82,7 @@ To run the production app payload logic quickly without building an APK:
 
 This uses the app payload and its P0/KernelSnitch path, but the loader still runs in the ADB shell SELinux domain. It proves the main native route, not app-domain policy. The full log remains at `/data/local/tmp/a54x-app-route.log`.
 
-For a real app-domain test, place `cve-2026-43499-app.release.so` in the matching local Root My Galaxy payload asset and launch it from the app. The APK itself is outside this change.
+For a real app-domain test, copy one ready-built artifact to the matching local Root My Galaxy payload asset as `cve-2026-43499-app.so`, verify its hash, and launch it from the app. The APK itself is outside this change.
 
 The first full run is one attempt only:
 
