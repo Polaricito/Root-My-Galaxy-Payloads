@@ -67,10 +67,10 @@ oracle. Pselect is not a writer backend for this target.
 | pipeflag + SIGRETURN | `artifacts/dm3q-S918BXXSAFZF5/cve-2026-43499-app-pipeflag-sigreturn.so` | `6542f706b1d7b2d2194ab642ed3365bba20d51f834e037ed2d4a61cddef74155` | 104128 bytes |
 
 Verify the hash before each test so the log can be tied to the right backend.
-The `pipeflag` files prove the QEMU-tested page-cache overwrite route; they are
-not yet full real-device root payloads. Do not run them on hardware yet: the
-exact FZF5 target file, service trigger, SELinux effect, and cleanup are still
-unverified.
+The `pipeflag` files are experimental hardware test payloads for the
+QEMU-verified page-cache overwrite route. Test them only on the exact FZF5
+target and retain the full log and payload hash; the file, service trigger,
+SELinux effect, and cleanup are what the hardware test must validate.
 
 ## Build both variants
 
