@@ -304,6 +304,11 @@ int install_android_root(int fd) {
   pr_info("root direct start uid=%u fd=%d\n", root_uid_before, fd);
   int installed = install_workqueue_umh_root(fd);
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
+#if defined(QEMU_FORCED_SLIDE_TEST) && QEMU_FORCED_SLIDE_TEST
+  if (installed) {
+    pr_info("root p0 reference holder not required for qemu forced slide\n");
+  }
+#else
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
   if (installed && (p0_gate_page_struct || p0_probe_page_struct)) {
 #else
@@ -328,6 +333,7 @@ int install_android_root(int fd) {
     pr_info("root p0 reference holder not required for cached virtual base\n");
 #endif
   }
+#endif
 #endif
   return installed;
 }

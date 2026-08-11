@@ -408,6 +408,16 @@ int restore_slide_boot_id(int fd);
 int install_child_root(int fd);
 int try_cfi_stage(void);
 
+
+
+void put_fake_waiter(unsigned char *payload, size_t waiter_off,
+                     uintptr_t tree_parent, uintptr_t tree_right,
+                     uintptr_t tree_left, uintptr_t pi_parent,
+                     uintptr_t pi_right, uintptr_t pi_left,
+                     uintptr_t task, uintptr_t lock,
+                     uint32_t priority);
+
+
 void init_ctx(struct mm_ctx *ctx, size_t cnt);
 void resize_pipe_slots(int pipefd[2], size_t slots);
 void make_pipe_object(int pipefd[2]);

