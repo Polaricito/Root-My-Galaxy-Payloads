@@ -380,6 +380,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex);
 void do_pselect_fake_lock_route(void);
 
 int slide_leak_kernel_base(void);
+int shell_trigger_fops_stack_route(void);
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
 void app_publish_p0_offset(uintptr_t offset);
 void app_publish_p0_dirty(void);

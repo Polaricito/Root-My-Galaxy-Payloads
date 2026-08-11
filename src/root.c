@@ -44,6 +44,13 @@ struct umh_kernel_data {
 _Static_assert(sizeof(struct umh_subprocess_info) == 112,
                "subprocess_info layout");
 _Static_assert(sizeof(struct umh_completion) == 32, "completion layout");
+#if defined(SHELL_PERF_PAGE_ORACLE) && SHELL_PERF_PAGE_ORACLE
+_Static_assert(ROOT_UMH_WORK_OFF + sizeof(struct umh_subprocess_info) <=
+                   ROOT_UMH_DATA_OFF,
+               "shell root work overlaps data");
+_Static_assert(ROOT_UMH_DATA_OFF + sizeof(struct umh_kernel_data) <= PAGE_SIZE,
+               "shell root data exceeds page");
+#endif
 
 static int root_read_data(
     int fd, uintptr_t target, void *data, size_t len) {
