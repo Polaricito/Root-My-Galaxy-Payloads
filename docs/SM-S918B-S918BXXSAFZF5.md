@@ -55,12 +55,16 @@ oracle. Pselect is not a writer backend for this target.
 
 ## Ready-built test payloads
 
-| Backend | File | SHA-256 | Size |
+| Route | File | SHA-256 | Size |
 | --- | --- | --- | --- |
-| MCAST | `artifacts/dm3q-S918BXXSAFZF5/cve-2026-43499-app.so` | `63076e77cf73d24e7314ad52611594726a61a282e08669c7e2822faf0c3b7c7c` | 104128 bytes |
-| SIGRETURN | `artifacts/dm3q-S918BXXSAFZF5/cve-2026-43499-app-sigreturn.so` | `b8f63805c15a0f5276fb451e2e836cdb3653d6fe088e394ececb4e1d23516c38` | 104128 bytes |
+| fops + MCAST | `artifacts/dm3q-S918BXXSAFZF5/cve-2026-43499-app.so` | `63076e77cf73d24e7314ad52611594726a61a282e08669c7e2822faf0c3b7c7c` | 104128 bytes |
+| fops + SIGRETURN | `artifacts/dm3q-S918BXXSAFZF5/cve-2026-43499-app-sigreturn.so` | `b8f63805c15a0f5276fb451e2e836cdb3653d6fe088e394ececb4e1d23516c38` | 104128 bytes |
+| pipeflag + MCAST | `artifacts/dm3q-S918BXXSAFZF5/cve-2026-43499-app-pipeflag.so` | `17ad5d7c1688430a642d2a4e8cb0d981130d96d58cf3fab9082696ff3b70c321` | 104128 bytes |
+| pipeflag + SIGRETURN | `artifacts/dm3q-S918BXXSAFZF5/cve-2026-43499-app-pipeflag-sigreturn.so` | `6542f706b1d7b2d2194ab642ed3365bba20d51f834e037ed2d4a61cddef74155` | 104128 bytes |
 
 Verify the hash before each test so the log can be tied to the right backend.
+The `pipeflag` files prove the QEMU-tested page-cache overwrite route; they are
+not yet full real-device root payloads.
 
 ## Build both variants
 
