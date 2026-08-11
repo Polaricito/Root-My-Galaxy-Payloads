@@ -48,7 +48,11 @@ rootless P0 fingerprint and KernelSnitch
   0 in QEMU.
 - `pipeflag` is a shorter experimental backend. Its page-cache overwrite is
   QEMU-verified, but its exact FZF5 file and service trigger are not yet
-  hardware-verified.
+  hardware-verified. The terminal-stage idea comes from
+  [polygraphene/CyberMeowfia](https://github.com/polygraphene/CyberMeowfia), as
+  announced in
+  [Root-My-Galaxy-Payloads issue #117](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads/issues/117#issuecomment-5255726919);
+  this branch adapts that idea rather than porting the full CyberMeowfia chain.
 
 The production payload does not use tracefs, `perf_event_open`, or a QEMU
 oracle. Pselect is not a writer backend for this target.
