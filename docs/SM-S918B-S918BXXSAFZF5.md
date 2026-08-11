@@ -64,7 +64,9 @@ oracle. Pselect is not a writer backend for this target.
 
 Verify the hash before each test so the log can be tied to the right backend.
 The `pipeflag` files prove the QEMU-tested page-cache overwrite route; they are
-not yet full real-device root payloads.
+not yet full real-device root payloads. Do not run them on hardware yet: the
+exact FZF5 target file, service trigger, SELinux effect, and cleanup are still
+unverified.
 
 ## Build both variants
 
