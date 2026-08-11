@@ -2,7 +2,8 @@
 #define OFFSET_H
 
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
-#error A54 app payload is disabled until a real FZF4 P0 fingerprint is generated
+#define BUILD_VARIANT_LABEL "a54x-A546EXXSKFZF4-app-physical-p0-oracle"
+#define APP_PHYS_P0_ORACLE 1
 #else
 #define BUILD_VARIANT_LABEL "a54x-A546EXXSKFZF4-root-umh"
 #endif
@@ -56,7 +57,7 @@
 #define SLIDE_KSNITCH_APPENDED_FUTEXES 2048
 #define SLIDE_KSNITCH_REPEAT_MEASUREMENT 64
 #define SLIDE_KSNITCH_AVERAGE 8
-#define SLIDE_BANK_SLOTS 2
+#define SLIDE_BANK_SLOTS 4
 #define SLIDE_BANK_TASK_OFF 0x800
 #define SLIDE_BANK_TASK_STRIDE 0x1c0
 #define SLIDE_BANK_LOCK_OFF 0x1e00

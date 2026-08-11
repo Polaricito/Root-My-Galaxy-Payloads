@@ -43,11 +43,7 @@ ROOT_HELPER := $(OUTDIR)/cve-2026-43499-root
 NATIVE_MCAST_TEST := $(OUTDIR)/test-native-mcast-overlap
 PERF_PAGE_TEST := $(OUTDIR)/test-perf-page-oracle
 
-ifeq ($(TARGET),a54x-A546EXXSKFZF4)
-ALL_TARGETS := $(PRELOAD) $(ROOT_HELPER)
-else
 ALL_TARGETS := $(PRELOAD) $(APP_PRELOAD) $(ROOT_HELPER)
-endif
 
 PRELOAD_SRCS := \
   src/main.c \
