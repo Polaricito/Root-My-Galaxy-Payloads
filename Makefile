@@ -8,6 +8,10 @@ endif
 
 TARGET_HEADER := src/targets/$(TARGET)/target.h
 TARGET_INCLUDE := targets/$(TARGET)/target.h
+TARGET_EXTRA_HEADERS :=
+ifeq ($(TARGET),a53x-A536EXXSNGZG3)
+TARGET_EXTRA_HEADERS := src/targets/a53x-A536EXXSNGZG3/fops_table.h
+endif
 TARGET_CC := $(ANDROID_NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$(API)-clang
 
 ifeq ($(wildcard $(TARGET_CC)),)
@@ -69,18 +73,18 @@ release: $(APP_RELEASE)
 $(OUTDIR):
 	mkdir -p $@
 
-$(PRELOAD): $(PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
+$(PRELOAD): $(PRELOAD_SRCS) $(TARGET_HEADER) $(TARGET_EXTRA_HEADERS) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -fPIC $(COMMON_CFLAGS) $(PRELOAD_SRCS) \
 	  -shared -pthread -o $@
 
 $(ROOT_HELPER): src/su_daemon.c | $(OUTDIR)
 	$(TARGET_CC) -fPIE -pie -O2 -g0 -Wall -Wextra $< -ldl -o $@
 
-$(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
+$(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) $(TARGET_EXTRA_HEADERS) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 -fPIC $(COMMON_CFLAGS) $(APP_PRELOAD_SRCS) \
 	  -shared -pthread -o $@
 
-$(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
+$(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) $(TARGET_EXTRA_HEADERS) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 -fPIC $(APP_RELEASE_OPT) -g0 \
 	  -fno-unwind-tables -fno-asynchronous-unwind-tables \
 	  -ffunction-sections -fdata-sections \

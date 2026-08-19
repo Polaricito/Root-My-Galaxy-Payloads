@@ -25,12 +25,27 @@
 #include <unistd.h>
 
 #define BOOTSTRAP_SOCK_PATH "/data/local/tmp/temp_su.sock"
+#define SU_SOCKET_ENV "CVE43499_SU_SOCKET"
 #define HOLD_READY_SOCKET "cve43499_roothold"
 #define SH_PATH "/system/bin/sh"
 #define KSU_LOADER_PATH "/data/local/tmp/ksud-s25u-kdp"
 #define LOGCAT_PATH "/system/bin/logcat"
 
+static char su_socket_path[108] = BOOTSTRAP_SOCK_PATH;
 static uid_t allowed_client_uid = 2000;
+
+static void resolve_socket_path(void) {
+  const char *override = getenv(SU_SOCKET_ENV);
+  size_t length;
+
+  if (!override || !*override)
+    return;
+  length = strnlen(override, sizeof(su_socket_path) - 1);
+  if (length == 0)
+    return;
+  memcpy(su_socket_path, override, length);
+  su_socket_path[length] = 0;
+}
 
 #define SU_PROTOCOL_MAGIC 0x53553235U
 #define SU_PROTOCOL_VERSION 1U
@@ -147,7 +162,7 @@ static int connect_daemon(void) {
   struct sockaddr_un sun;
   memset(&sun, 0, sizeof(sun));
   sun.sun_family = AF_UNIX;
-  snprintf(sun.sun_path, sizeof(sun.sun_path), "%s", BOOTSTRAP_SOCK_PATH);
+  snprintf(sun.sun_path, sizeof(sun.sun_path), "%s", su_socket_path);
 
   if (connect(fd, (struct sockaddr *)&sun, sizeof(sun)) != 0) {
     perror("su: connect daemon");
@@ -860,15 +875,15 @@ static int daemon_main(void) {
   struct sockaddr_un sun;
   memset(&sun, 0, sizeof(sun));
   sun.sun_family = AF_UNIX;
-  unlink(BOOTSTRAP_SOCK_PATH);
-  snprintf(sun.sun_path, sizeof(sun.sun_path), "%s", BOOTSTRAP_SOCK_PATH);
+  unlink(su_socket_path);
+  snprintf(sun.sun_path, sizeof(sun.sun_path), "%s", su_socket_path);
 
   if (bind(fd, (struct sockaddr *)&sun, sizeof(sun)) != 0 ||
       listen(fd, 16) != 0) {
     close(fd);
     return 1;
   }
-  chmod(BOOTSTRAP_SOCK_PATH, 0666);
+  chmod(su_socket_path, 0666);
 
   for (;;) {
     int conn = accept4(fd, NULL, NULL, SOCK_CLOEXEC);
@@ -897,7 +912,7 @@ static int umh_main(int argc, char **argv) {
   if (geteuid() != 0) {
     return 126;
   }
-  if (argc != 3) {
+  if (argc != 3 && argc != 4) {
     return 124;
   }
   char *end = NULL;
@@ -908,6 +923,15 @@ static int umh_main(int argc, char **argv) {
     return 123;
   }
   allowed_client_uid = (uid_t)parsed_uid;
+  if (argc == 4) {
+    size_t length = strnlen(argv[3], sizeof(su_socket_path) - 1);
+
+    if (length == 0) {
+      return 123;
+    }
+    memcpy(su_socket_path, argv[3], length);
+    su_socket_path[length] = 0;
+  }
   if (setresgid(0, 0, 0) != 0 || setresuid(0, 0, 0) != 0 ||
       getuid() != 0 || geteuid() != 0 || getgid() != 0 || getegid() != 0) {
     return 125;
@@ -1118,6 +1142,7 @@ static int payload_runner_main(int argc, char **argv) {
 
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
+  resolve_socket_path();
   if (argc >= 2 && strcmp(argv[1], "--run-payload") == 0) {
     return payload_runner_main(argc, argv);
   }

