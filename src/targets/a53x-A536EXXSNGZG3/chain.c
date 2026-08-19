@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
@@ -364,20 +365,60 @@ static int is_direct_pointer(uint64_t value) {
   return value >= PAGE_OFFSET && value < KERNEL_TEXT_MIN && !(value & 7);
 }
 
+static int root_socket_errno;
+
 static int root_socket_ready(void) {
   struct sockaddr_un address;
   const char *path = su_socket_path();
   int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   int ready;
 
-  if (fd < 0)
+  if (fd < 0) {
+    root_socket_errno = errno;
     return 0;
+  }
   memset(&address, 0, sizeof(address));
   address.sun_family = AF_UNIX;
   snprintf(address.sun_path, sizeof(address.sun_path), "%s", path);
   ready = connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0;
+  if (!ready)
+    root_socket_errno = errno;
   close(fd);
   return ready;
+}
+
+static int daemon_present(void) {
+  static const char term[] = "--umh";
+  DIR *directory = opendir("/proc");
+  struct dirent *entry;
+  int found = 0;
+
+  if (!directory)
+    return 0;
+  while ((entry = readdir(directory))) {
+    char path[64];
+    char cmdline[256];
+    FILE *stream;
+    int length;
+
+    if (entry->d_name[0] < '0' || entry->d_name[0] > '9')
+      continue;
+    snprintf(path, sizeof(path), "/proc/%s/cmdline", entry->d_name);
+    stream = fopen(path, "r");
+    if (!stream)
+      continue;
+    length = (int)fread(cmdline, 1, sizeof(cmdline) - 1, stream);
+    fclose(stream);
+    if (length > 0) {
+      cmdline[length] = 0;
+      if (strstr(cmdline, term) && strstr(cmdline, su_socket_path())) {
+        found = 1;
+        break;
+      }
+    }
+  }
+  closedir(directory);
+  return found;
 }
 
 static int wake_system_unbound(void) {
@@ -538,6 +579,8 @@ static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
          (unsigned long long)wq, (unsigned long long)pwq,
          (unsigned long long)pool, (unsigned long long)work, color, nr_inflight,
          nr_active, refcnt);
+  printf("root umh helper=%s socket=%s uid=%u\n", root_helper,
+         su_socket_path(), getuid());
   fflush(stdout);
 
   for (int attempt = 0; attempt < 8 && !complete_done; attempt++) {
@@ -557,6 +600,7 @@ static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
               &raw_retval))
     return 0;
   retval = (int32_t)raw_retval;
+  root_socket_errno = 0;
   if (complete_done) {
     for (int attempt = 0; attempt < 200; attempt++) {
       if (root_socket_ready())
@@ -564,8 +608,10 @@ static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
       usleep(10000);
     }
   }
-  printf("root result wake=%d complete=%u retval=%d socket=%d\n", wake_ok,
-         complete_done, retval, root_socket_ready());
+  printf("root result wake=%d complete=%u retval=%d socket=%d "
+         "errno=%d daemon=%d enforce=%d\n",
+         wake_ok, complete_done, retval, root_socket_ready(),
+         root_socket_errno, daemon_present(), selinux_disabled() ? 0 : 1);
   fflush(stdout);
   return complete_done && !retval && root_socket_ready();
 }
