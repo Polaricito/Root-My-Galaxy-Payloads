@@ -49,7 +49,7 @@ this device.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `artifacts/a53x-A536EXXSNGZG3/cve-2026-43499-app.so` | 104128 | `f41f49d33be95462fee118218e59e95d1073d0d9cb6e88172975a8cf090e2428` |
+| `artifacts/a53x-A536EXXSNGZG3/cve-2026-43499-app.so` | 104128 | `6acc5204cff640d72e5630a4d2e0346f9bb3ec33fcf68ef30c5c0d691b21e572` |
 | `kernelsu/android12-5.10_kernelsu-A536EXXSNGZG3-kdp.ko` | 341368 | `ae9d3815c69d708063a77c49470357f2b5b45ba7313cde6cebbf32ae05fa17a8` |
 | `kernelsu/ksud-A536EXXSNGZG3-kdp` | 4870752 | `c35130bf54f7b8e3c31eee2349c7e053d1e2878b4d47b21090012523ff02e3ef` |
 

