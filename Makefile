@@ -82,7 +82,7 @@ $(ROOT_HELPER): src/su_daemon.c | $(OUTDIR)
 
 $(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) $(TARGET_EXTRA_HEADERS) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 -fPIC $(COMMON_CFLAGS) $(APP_PRELOAD_SRCS) \
-	  -shared -pthread -o $@
+	  -shared -pthread -ldl -o $@
 
 $(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) $(TARGET_EXTRA_HEADERS) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 -fPIC $(APP_RELEASE_OPT) -g0 \
@@ -91,7 +91,7 @@ $(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) $(TARGET_EXTRA_HEADERS) src
 	  -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
 	  -Isrc -DTARGET_HEADER='"$(TARGET_INCLUDE)"' \
 	  $(TARGET_CFLAGS) \
-	  $(APP_PRELOAD_SRCS) -shared -pthread \
+	  $(APP_PRELOAD_SRCS) -shared -pthread -ldl \
 	  $(APP_RELEASE_LINK_FLAGS) -o $@
 	@test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE)
 	truncate -s $(APP_RELEASE_SIZE) $@
