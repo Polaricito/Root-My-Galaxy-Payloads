@@ -18,6 +18,16 @@ channel, found and reclaimed the target page with KernelSnitch, established
 kernel read/write, and reached `ROOT_OK`. The runtime path uses neither
 tracefs nor `perf_event_open`.
 
+The root handoff matches the app-shipped helper contract exactly: the
+injected usermodehelper runs `libcve43499root.so --umh <uid>` with a single
+argument after the mode flag (argc==3; the helper's `umh_main` rejects any
+other argc) and the daemon binds the fixed `/data/local/tmp/temp_su.sock`
+(unix socket, mode 0666), serving only the requested client uid. The chain
+bridges kernel write access into that socket and returns `ROOT_OK`. A second
+UMH injection on the same boot corrupted the shared workqueue state and
+panicked the device, so the payload never queues a second forged work;
+diagnostics are limited to passive reads.
+
 The exact KernelSU module was late-loaded on the same boot. KernelSU Manager
 reported `Working <LKM> [Jailbreak mode]`, version `32525-2`.
 
