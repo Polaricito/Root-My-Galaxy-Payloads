@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/utsname.h>
 
@@ -64,15 +65,26 @@
 #define CALL_USERMODEHELPER_EXEC_WORK_IMAGE 0xffffffc0080f6be4ULL
 
 static inline uint64_t ashmem_fops_image(void) {
+  static int target_logged;
   struct utsname name;
+  uint64_t image;
+  const char *build;
 
   if (uname(&name))
     abort();
   if (!strcmp(name.release, TARGET_KERNEL_RELEASE))
-    return ASHMEM_FOPS_IMAGE_GZG3;
-  if (!strcmp(name.release, TARGET_KERNEL_RELEASE_OGZH2))
-    return ASHMEM_FOPS_IMAGE_OGZH2;
-  abort();
+    image = ASHMEM_FOPS_IMAGE_GZG3;
+  else if (!strcmp(name.release, TARGET_KERNEL_RELEASE_OGZH2))
+    image = ASHMEM_FOPS_IMAGE_OGZH2;
+  else
+    abort();
+  build = image == ASHMEM_FOPS_IMAGE_OGZH2 ? "OGZH2" : "GZG3";
+  if (!target_logged) {
+    fprintf(stderr, "A536_TARGET build=%s release=%s ashmem_fops=%#llx\n",
+            build, name.release, (unsigned long long)image);
+    target_logged = 1;
+  }
+  return image;
 }
 
 #define ASHMEM_FOPS_IMAGE ashmem_fops_image()
