@@ -22,8 +22,9 @@ The exact KernelSU module was late-loaded on the same boot. KernelSU Manager
 reported `Working <LKM> [Jailbreak mode]`, version `32525-2`. That was KernelSU
 v3.2.5. The artifacts below are the v3.3.0 rebuild (`KSU_VERSION` 32601,
 commit `932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e`) with the same Samsung
-KDP/RKP/DEFEX and no-patch-text source; they are build- and statically
-verified but have not yet been re-loaded on hardware.
+KDP/RKP/DEFEX and no-patch-text source; it loads on the same hardware and
+KernelSU Manager reports version `32601-2`, with no kernel-driver and manager
+version mismatch.
 
 The production source is split by stage under
 `src/targets/a53x-A536EXXSNGZG3/`: `payload.c` is the app entry point,
