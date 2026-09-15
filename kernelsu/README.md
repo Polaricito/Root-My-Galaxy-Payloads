@@ -37,8 +37,8 @@ between KMIs.
 | `ksud-gts9-X710XXS6EZF1-kdp` | Same exact X710 build | `android13-5.15` | Device-tested late-load binary embedding the exact X710 no-patch-text module; KernelSU Manager reports `Working <LKM> [Jailbreak mode]` |
 | `android13-5.15.153_kernelsu-dm1q-S911U1UES6DYI3-kdp.ko` | `SM-S911U1`, `S911U1UES6DYI3` | `android13-5.15.153` | Exact DYI3 module with target `vermagic`, audited for manual relocation; no-patch-text build (RKP) with kretprobe fallback hooks |
 | `ksud-dm1q-S911U1UES6DYI3-kdp` | Same exact DYI3 build | `android13-5.15.153` | Device-tested late-load binary embedding the exact DYI3 no-patch-text module |
-| `android12-5.10_kernelsu-A536EXXSNGZG3-kdp.ko` | `SM-A536E`, `A536EXXSNGZG3` | `android12-5.10` | v3.3.0 exact A53 module with Samsung KDP/RKP/DEFEX support and live text/table patching disabled; target `vermagic`, zero-length `__versions`, manual-relocation audit passed |
-| `ksud-A536EXXSNGZG3-kdp` | Same exact A53 build | `android12-5.10` | v3.3.0 late-load binary embedding the exact A53 module; embedded module blob hash-verified |
+| `android12-5.10_kernelsu-A536EXXSNGZG3-kdp.ko` | `SM-A536E`, `A536EXXSNGZG3` | `android12-5.10` | Device-tested v3.3.0 exact A53 module with Samsung KDP/RKP/DEFEX support and live text/table patching disabled; target `vermagic`, zero-length `__versions`, manual-relocation audit passed |
+| `ksud-A536EXXSNGZG3-kdp` | Same exact A53 build | `android12-5.10` | Device-tested v3.3.0 late-load binary embedding the exact A53 module; embedded module blob hash-verified |
 
 The standalone `.ko` files are retained for auditing. Root My Galaxy downloads
 the corresponding `ksud-*` file because `ksud late-load` loads its embedded
@@ -77,7 +77,9 @@ KernelSU Manager reporting `Working <LKM> [Jailbreak mode]` and version
 Galaxy app flow; KernelSU Manager reported `Working <LKM> [Jailbreak mode]`
 and version `32525-2`. The A536E pair has since been upgraded to v3.3.0
 (`KSU_VERSION` 32601); the v3.3.0 module and `ksud` are build- and statically
-verified, but have not yet been re-validated on hardware. The older A15 5.10
+verified, and device-tested: the v3.3.0 build loads and KernelSU Manager
+reports `Working <LKM> [Jailbreak mode]`, version `32601-2`, with no driver
+and manager mismatch. The older A15 5.10
 pair remains device-untested. The exact F9360ZCSAIZF1 no-LTO module above is
 device-tested (full-chain root and KernelSU Manager recognition on hardware,
 2026-08-12 and 2026-09-01).
@@ -448,5 +450,6 @@ SHA-256: 10c395d7358e832d971ae93ec1adf6930ef41f5374ea3df0ea2b992b8c5aba0c
 
 The embedded module inside `ksud` was verified byte-for-byte: a raw-deflate
 asset at `0x3045e` inflates to 347432 bytes with the module's SHA-256. The
-v3.2.5 pair this replaces was the device-tested one; the v3.3.0 artifacts are
-build- and statically verified but await re-validation on hardware.
+v3.3.0 pair device-tested: the module late-loads cleanly, KernelSU Manager
+reports version `32601-2`, and there is no kernel-driver and manager version
+mismatch.
