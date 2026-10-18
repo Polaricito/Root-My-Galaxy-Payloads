@@ -8,8 +8,11 @@ between KMIs.
 
 The `A536EXXSNGZG3` pair is the v3.3.1 build (`KSU_VERSION` 32680), so a
 KernelSU Manager 3.3.1 install reports no driver/manager version mismatch. It is
-build- and statically verified; the hardware load of this pair is still pending
-(see [Rebuild the A536E GZG3 pair on v3.3.1](#rebuild-the-a536e-gzg3-pair-on-v331-32680)).
+device-tested: on 2026-10-18 it late-loaded from the normal Root My Galaxy app
+flow on `A536EXXSOGZH2` firmware, and KernelSU Manager reported
+`Working [Jailbreak mode]`, version `32680-5`, `Custom`, with no
+`Kernel update required` banner. See
+[Rebuild the A536E GZG3 pair on v3.3.1](#rebuild-the-a536e-gzg3-pair-on-v331-32680).
 
 ## Versioned artifacts
 
@@ -42,8 +45,8 @@ build- and statically verified; the hardware load of this pair is still pending
 | `ksud-gts9-X710XXS6EZF1-kdp` | Same exact X710 build | `android13-5.15` | Device-tested late-load binary embedding the exact X710 no-patch-text module; KernelSU Manager reports `Working <LKM> [Jailbreak mode]` |
 | `android13-5.15.153_kernelsu-dm1q-S911U1UES6DYI3-kdp.ko` | `SM-S911U1`, `S911U1UES6DYI3` | `android13-5.15.153` | Exact DYI3 module with target `vermagic`, audited for manual relocation; no-patch-text build (RKP) with kretprobe fallback hooks |
 | `ksud-dm1q-S911U1UES6DYI3-kdp` | Same exact DYI3 build | `android13-5.15.153` | Device-tested late-load binary embedding the exact DYI3 no-patch-text module |
-| `android12-5.10_kernelsu-A536EXXSNGZG3-kdp.ko` | `SM-A536E`, `A536EXXSNGZG3` | `android12-5.10` | v3.3.1 (32680) exact A53 module with Samsung KDP/RKP/DEFEX support and live text/table patching disabled; target `vermagic`, zero-length `__versions`, `check_symbol` against the DDK `vmlinux` passed |
-| `ksud-A536EXXSNGZG3-kdp` | Same exact A53 build | `android12-5.10` | v3.3.1 late-load binary embedding the exact A53 module; embedded module blob hash-verified; hardware load pending |
+| `android12-5.10_kernelsu-A536EXXSNGZG3-kdp.ko` | `SM-A536E`, `A536EXXSNGZG3` | `android12-5.10` | Device-tested v3.3.1 (32680) exact A53 module with Samsung KDP/RKP/DEFEX support and live text/table patching disabled; target `vermagic`, zero-length `__versions`, `check_symbol` against the DDK `vmlinux` passed |
+| `ksud-A536EXXSNGZG3-kdp` | Same exact A53 build | `android12-5.10` | Device-tested v3.3.1 late-load binary embedding the exact A53 module; embedded module blob hash-verified; Manager reports `32680-5` |
 
 The standalone `.ko` files are retained for auditing. Root My Galaxy downloads
 the corresponding `ksud-*` file because `ksud late-load` loads its embedded
@@ -85,9 +88,12 @@ and version `32525-2`. The A536E pair has since been upgraded to v3.3.0
 verified, and device-tested: the v3.3.0 build loads and KernelSU Manager
 reports `Working <LKM> [Jailbreak mode]`, version `32601-2`, with no driver
 and manager mismatch. The A536E pair was then rebuilt on v3.3.1
-(`KSU_VERSION` 32680, commit `0c0fdb960178fa12d80d6cbcfdcb6ad8be6a865d`); that
-pair is build- and statically verified, with the hardware load and the
-target-ELF audit still pending. The older A15 5.10
+(`KSU_VERSION` 32680, commit `0c0fdb960178fa12d80d6cbcfdcb6ad8e6a865d`) and is
+device-tested: on 2026-10-18 it late-loaded on `A536EXXSOGZH2` firmware and
+KernelSU Manager reported `Working [Jailbreak mode]`, version `32680-5`, with
+no driver/manager mismatch. Only the audit against the recovered
+`A536EXXSNGZG3` `vmlinux` stays open, because that ELF is not in this
+repository. The older A15 5.10
 pair remains device-untested. The exact F9360ZCSAIZF1 no-LTO module above is
 device-tested (full-chain root and KernelSU Manager recognition on hardware,
 2026-08-12 and 2026-09-01).
@@ -565,10 +571,16 @@ Two things were re-checked instead of copied from v3.3.0:
 
 The exact GZG3 release in `vermagic` is not a limit on which A53 firmware the
 pair runs on. `ksuinit::load_module()` reads the vermagic the kernel reports when
-`init_module` fails, rewrites the module's `.modinfo` entry with it, and retries,
-which is how a GZG3-vermagic module loads on `A536EXXSOGZH2` kernels
-(`5.10.237-android12-9-31999025-abA536EXXSOGZH2`).
+`init_module` fails, rewrites the module's `.modinfo` entry with it, and retries.
+The 2026-10-18 hardware run took that path: the device was on
+`BP2A.250605.031.A3.A536EXXSOGZH2` (kernel `5.10.237-android12-9-31999025-abA536EXXSOGZH2`)
+and the GZG3-vermagic module loaded after the loader replaced it.
 
-Still open for this pair: load it on hardware and confirm KernelSU Manager
-reports `Working <LKM> [Jailbreak mode]` with version `32680-2` and no
-`Kernel update required` banner.
+Device-tested on 2026-10-18: the pair late-loads from the normal Root My Galaxy
+app flow, KernelSU Manager 3.3.1 reports `Working [Jailbreak mode]`, version
+`32680-5`, `Custom`, with no `Kernel update required` banner, SELinux is
+`Enforcing` and seccomp is `Filter`. See
+`../docs/SM-A536E-A536EXXSNGZG3.md` for the evidence.
+
+Still open: the manual-relocation audit against the recovered `A536EXXSNGZG3`
+`vmlinux`.

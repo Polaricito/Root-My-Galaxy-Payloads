@@ -7,10 +7,11 @@ kernel below.
 | --- | --- |
 | Model | `SM-A536E` |
 | Device | `a53x` |
-| Firmware | `A536EXXSNGZG3` |
+| Firmware | `A536EXXSNGZG3`, and `A536EXXSOGZH2` (see Firmware coverage) |
 | Android | 16 / API 36 |
 | Page size | 4096 |
 | Kernel | `5.10.237-android12-9-31999025-abA536EXXSNGZG3` |
+| Build ID | `BP2A.250605.031.A3` |
 
 The payload ran from the normal application domain
 (`u:r:untrusted_app:s0`), found the KASLR slide with the CPU0-pinned prefetch
@@ -24,9 +25,12 @@ v3.2.5. The v3.3.0 rebuild (`KSU_VERSION` 32601, commit
 `932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e`) used the same Samsung KDP/RKP/DEFEX
 and no-patch-text source, loaded on the same hardware, and made KernelSU Manager
 report version `32601-2` with no driver/manager mismatch. The published
-artifacts are now the v3.3.1 rebuild (`KSU_VERSION` 32680, commit
-`0c0fdb960178fa12d80d6cbcfdcb6ad8be6a865d`), which is build- and
-statically verified but not yet loaded on hardware.
+artifacts are the v3.3.1 rebuild (`KSU_VERSION` 32680, commit
+`0c0fdb960178fa12d80d6cbcfdcb6ad8be6a865d`), which was then loaded on hardware:
+KernelSU Manager 3.3.1 (`32680-5`) reports `Working [Jailbreak mode]`, version
+`32680-5`, `Custom`, `LKM`, with no `Kernel update required` banner, SELinux
+`Enforcing` and seccomp `Filter`. Root My Galaxy 0.2.65 (13) reports
+`KernelSU active` on the same boot.
 
 The production source is split by stage under
 `src/targets/a53x-A536EXXSNGZG3/`: `payload.c` is the app entry point,
@@ -47,6 +51,9 @@ skipped because they did not reclaim reliably into the SKB allocation path on
 this device.
 
 ## Device evidence
+
+Captured 2026-10-18 from the v3.3.1 pair (`32680`) on firmware
+`BP2A.250605.031.A3.A536EXXSOGZH2`.
 
 | Root My Galaxy | KernelSU Manager |
 | --- | --- |
@@ -94,9 +101,10 @@ for `ksud`. The v3.3.0 module's audit against the target `vmlinux` resolved all
 intended `tracepoint_probe_register` -> `tracepoint_probe_register_prio`
 change.
 
-What still has to happen for the v3.3.1 pair: load it on hardware and confirm
-KernelSU Manager reports `Working <LKM> [Jailbreak mode]` with version
-`32680-2` and no `Kernel update required` banner.
+Device-tested on 2026-10-18: the v3.3.1 pair late-loads from the normal Root My
+Galaxy app flow, KernelSU Manager 3.3.1 reports `Working [Jailbreak mode]` with
+version `32680-5` and no `Kernel update required` banner, and Root My Galaxy
+reports `KernelSU active`.
 
 The result is a volatile LKM installation. A reboot removes KernelSU and the
 bootstrap/late-load process must be run again. No boot image was flashed.
@@ -151,11 +159,19 @@ The new `selinux_hide` code also reaches `prepare_creds()`/`commit_creds()` in
 so the new credential path stays unreachable on this target, exactly as in the
 device-tested v3.3.0 module.
 
+## Firmware coverage
+
 Firmware coverage is unchanged by the version bump. The exact GZG3 vermagic is
 not what restricts this pair to GZG3: `ksuinit::load_module()` reads the
 vermagic the kernel reports when `init_module` fails, rewrites the module's
-`.modinfo` entry with it, and retries, so this module also loads on
-`5.10.237-android12-9-31999025-abA536EXXSOGZH2` (`A536EXXSOGZH2`) kernels.
+`.modinfo` entry with it, and retries.
+
+That path is what the 2026-10-18 hardware run exercised. The device in the
+evidence table is on `BP2A.250605.031.A3.A536EXXSOGZH2`, kernel
+`5.10.237-android12-9-31999025-abA536EXXSOGZH2`, and the GZG3-vermagic module
+loaded after the loader replaced its vermagic with the one the kernel required.
+The same run therefore covers both `A536EXXSNGZG3` and `A536EXXSOGZH2`
+(`BP2A.250605.031.A3`, Android 16 / API 36, 4K pages).
 
 This profile is exact-build support; it does not claim compatibility with
 other Galaxy A53 models, firmware, or kernel releases.
